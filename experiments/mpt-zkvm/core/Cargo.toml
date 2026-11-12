@@ -1,0 +1,18 @@
+# The checks, shared by the guest (which proves them) and the host (which runs them natively first,
+# so a bad input fails in a second rather than after a proof). Versions are spelled out rather
+# than inherited, because the guest builds this crate from its own workspace.
+[package]
+name = "mpt-core"
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[dependencies]
+# `tiny-keccak`: Keccak through the crate the guest patches with RISC Zero's accelerated fork.
+alloy-primitives = { version = "1.7", features = ["tiny-keccak"] }
+alloy-rlp = "0.3"
+alloy-trie = "0.9"
+alloy-consensus = "2.5"
+alloy-eips = "2.5"
+borsh = { version = "1.5", features = ["derive"] }

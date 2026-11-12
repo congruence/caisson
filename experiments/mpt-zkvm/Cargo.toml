@@ -1,0 +1,15 @@
+# Merkle-Patricia proofs in the RISC Zero zkVM, outside LEZ: the cost of the inclusion check an
+# attestation runs, executed (the public path's work) and proven (the private path's work).
+#
+# The guest is its own workspace (methods/guest), so its patches never reach the host build.
+[workspace]
+resolver = "2"
+members = ["core", "host", "methods"]
+
+# The executor and the prover are slow without optimisation, even in a dev build.
+[profile.dev]
+opt-level = 3
+
+[profile.release]
+debug = 1
+lto = true

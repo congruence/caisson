@@ -4,8 +4,8 @@ Paste each block below into the matching field of the
 [RFP proposal form](https://github.com/logos-co/rfp/issues/new?template=proposal.yml).
 Replace every `TODO` first. The form's issue body is capped at 65,536 characters.
 
-Built from `lez-hello-world` `rfp-021/proposal-draft.md`. Evidence links are pinned to
-`vineetpant/lez-hello-world@eb686e9` and `hu55a1n1/logos-explorations@d035841`.
+Evidence links are pinned to `vineetpant/lez-hello-world@eb686e9` and
+`hu55a1n1/logos-explorations@d035841`.
 
 ---
 
@@ -29,19 +29,25 @@ TODO (team): email, Telegram, Discord or Signal
 
 Member 1
 Name or pseudonym: Chirag Mahaveer Parmar
-Social links: TODO
+Social links: https://github.com/chirag-parmar
 Role: TODO
 Status: TODO
 
 Member 2
 Name or pseudonym: Shoaib Ahmed
-Social links: TODO
+Social links: https://github.com/hu55a1n1
 Role: TODO
 Status: TODO
 
 Member 3
 Name or pseudonym: Vineet Pant
-Social links: TODO
+Social links: https://github.com/vineetpant
+Role: TODO
+Status: TODO
+
+Member 4
+Name or pseudonym: Manas Nagaraj
+Social links: https://github.com/hopinheimer
 Role: TODO
 Status: TODO
 
@@ -52,752 +58,833 @@ that LEZ programs build on when they act on Ethereum, RFP-022's bridge among the
 Repository: [github.com/congruence/caisson](https://github.com/congruence/caisson), MIT and
 Apache-2.0.
 
-RFP-022's bridge, and any LEZ program that acts on Ethereum, needs one primitive: proof that a
-fact holds on finalized Ethereum, verified by LEZ itself, with no committee or oracle to trust.
+Any LEZ program that acts on Ethereum needs one primitive: proof that a fact holds on finalized
+Ethereum, verified by LEZ itself, with no committee or oracle to trust. Caisson is that
+primitive, as one LEZ 0.4 program.
 
-We build that primitive as one LEZ 0.4 program.
-
-- **Updates are proven, not split.** An update carries the sync-committee BLS12-381 aggregate,
-  the finality branch and the committee handoff. It runs on a private actor of the program,
-  proven by whoever submits it, and lands as **one** transaction.
-  - Measured on `v0.4.0-rc1` with a real mainnet update (E1): **419,311 exec gas** (4.2% of a
-    block) and **224,063 storage gas**.
-  - Measured again on a running v0.4 devnet, end to end through the fee path: a handoff update
-    and a finality update each landed in one transaction, for a net charge of 5,378,064 and
-    5,643,360 ([node runs](https://github.com/vineetpant/lez-hello-world/blob/eb686e9a0b2a8cef05f0017aa9eb694ad5212346/rfp-021/results.md#node-runs-eth_lc-on-a-lez-v04-devnet-real-proofs)).
-  - Executing the same check publicly costs 11.2M cycles (finality only) to 12.8M (with
-    handoff). That's over the 10M cap of one transaction, so it splits in two: 4.9M to prepare,
-    7.8M for the pairing (B3, B6, measured). That's about **30× more** exec gas.
-  - It needs no multi-transaction job protocol and no precompile.
-- **The module checks the aggregate itself (F.1).** It does so inside LEZ's own execution
-  proof, so no second proof system is added. This matches the RFP's own reasoning when it
-  dropped the off-chain prover: "LEZ execution is already proven".
-- **A public path is kept.** The same verifier core also runs publicly, split across
-  transactions. It answers the central feasibility question with measurements (P.2, P.8), and
-  it lets anyone submit with only a consensus endpoint and LEZ gas.
-- **Consumers attest in their own transaction, publicly or privately.** A private attestation
-  keeps the query inside the proof. One message crosses the boundary, a check that the
-  header record is held, sent from a blinded alias (F.8).
-- **Any finalized block, not just recorded ones,** so the instance needs only two updates per
-  sync-committee period. The EIP-2935 history contract reaches the 8,191 blocks before a record,
-  a parent-hash chain of headers reaches any block with no dependency at all, and beacon
-  `historical_summaries` reach further back.
-- **The Ethereum side is built by someone who worked on it.** All fetching and local
-  verification go through the Logos Ethereum core module, which wraps the Nimbus verified
-  proxy that Chirag Mahaveer Parmar worked on. That covers the upstream APIs the module still lacks
-  (light-client objects, raw `eth_getProof` nodes), the operator daemon and the F.9
-  checkpoint-verification API.
+- **One transaction per update, proven by the operator.** The sync-committee BLS12-381
+  aggregate, the finality branch and the committee handoff are checked by the program itself
+  (F.1), in a private actor of the program, inside LEZ's own execution proof. The sequencer
+  verifies one receipt. A real mainnet update with a handoff costs **429,723 exec gas** and
+  **224,063 storage gas**, against the 14.1M cycles the check itself takes. No job
+  state spans transactions, and no precompile is needed.
+- **Verified once, read by every consumer.** Each verified header is written once to its own
+  immutable record account. Consumers prove inclusion and evaluate their predicate against one
+  record, inside their own transaction (F.7), in a public or a private transaction.
+- **Private attestation adds no correlation signal (F.8).** The query, the Ethereum proof and
+  the predicate stay inside the consumer's proof. One message crosses to public state, a check
+  that the record is held, from a one-time alias.
+- **Any finalized block, from two updates a period.** Attestations reach the 8,191 blocks before
+  any record through the EIP-2935 history contract, and further through a parent-hash chain. The
+  instance needs only two updates per sync-committee period.
+- **Built and measured.** A prototype runs this design end to end on a LEZ `v0.4.0-rc1` devnet
+  (Bedrock, sequencer, indexer) with live mainnet data and real proofs: deploy, Init, a committee
+  handoff, a finality update, and public and private attestations, including to older blocks.
+  Every figure in this proposal comes from those runs.
 
 ## Technical Approach
 
-#### Evidence
+### 1. Design Overview
 
-Every number below is **measured**, **derived** from measured numbers with the arithmetic
-shown, or marked **to measure**. A number becomes "measured" only after a run we watched.
-The evidence is in two repositories, pinned to the commits this proposal cites. Both are
-private while they are prepared for release, and will be public before review.
+**Components**
 
-- **Experiment E1**, by Shoaib Ahmed: [[`logos-explorations/rfp-021/e1`](https://github.com/hu55a1n1/logos-explorations/tree/d035841b1efe484db91956eee2a9f47b305dcba3/rfp-021/e1)](https://github.com/hu55a1n1/logos-explorations/tree/d035841b1efe484db91956eee2a9f47b305dcba3/rfp-021/e1). Real proofs on
-  LEZ `v0.4.0-rc1`, through the sequencer's own settlement code: the proven-update mechanism,
-  its fee, and its refusals.
-- **The `eth_lc` prototype and its measurements**, by Vineet Pant:
-  [`lez-hello-world`](https://github.com/vineetpant/lez-hello-world/tree/eb686e9a0b2a8cef05f0017aa9eb694ad5212346). A LEZ v0.4 devnet (Bedrock, sequencer, indexer) running
-  deploy, Init, two updates and public and private attestations on live mainnet data with real
-  proofs, 3–6 Nov 2026.
-  - [Results](https://github.com/vineetpant/lez-hello-world/blob/eb686e9a0b2a8cef05f0017aa9eb694ad5212346/rfp-021/results.md), with raw logs in
-    [`rfp-021/results/`](https://github.com/vineetpant/lez-hello-world/tree/eb686e9a0b2a8cef05f0017aa9eb694ad5212346/rfp-021/results)
-  - [LEZ `v0.4.0-rc1` code paths and their costs](https://github.com/vineetpant/lez-hello-world/blob/eb686e9a0b2a8cef05f0017aa9eb694ad5212346/rfp-021/code-paths.md)
-  - [Benchmark plan and the conditions for a timed run](https://github.com/vineetpant/lez-hello-world/blob/eb686e9a0b2a8cef05f0017aa9eb694ad5212346/rfp-021/bench-plan.md)
-  - Native tests: the adversarial suite (VS.1, VS.2) and history proofs, in
-    [`tests/`](https://github.com/vineetpant/lez-hello-world/tree/eb686e9a0b2a8cef05f0017aa9eb694ad5212346/tests)
+- **Caisson program:** a LEZ program, deployed immutable. On the operator's private account it
+  runs the full update check (BLS aggregate, participation, finality, execution and handoff
+  branches) inside the operator's proof. On public accounts it keeps each instance's
+  configuration, consensus state, committees and finalised headers (section 4), and advances
+  only on a message from its own program.
+- **Finalised header accounts:** one per verified header, written once, never changed.
+- **Consumer program:** proves an Ethereum fact against one record and acts on the statement.
+- **Caisson Stake program:** a separate LEZ program with its own image ID. It holds stake
+  positions, locks backing behind records and settles challenges. It reads Caisson's records and
+  never writes them.
 
-The prototype runs `sextant-core`, the light-client verifier from the Sextant prototype
-([edenbd1/lez-sextant](https://github.com/edenbd1/lez-sextant), MIT OR Apache-2.0), vendored
-unmodified, and its program design follows Sextant's LEZ v0.3 program. Section 11 covers what
-the delivered module reuses.
+**Roles**
 
-#### 1. Two things called "light client"
+- **Operator:** fetches light-client updates through the Logos Ethereum core module, proves the
+  program's update check, and submits one transaction.
+- **Sequencer and indexers:** verify the receipt, run the small public part, and charge fees.
+- **Restaker (Caisson Stake):** checks a header against Ethereum's own finality with its own
+  node, then locks stake behind its record, forfeited in full if the header is proven false.
+- **Challenger (Caisson Stake):** watches backed records, and proves a false one with a later
+  record of the same instance and a history proof showing a different block hash.
 
-| | Operator's light client | On-chain verifier and state |
-|---|---|---|
-| What | Logos Ethereum core module (Nimbus `libverifproxy`) on the operator's machine | The attestation program's verifier code (image ID) plus its public instance and header-record actors |
-| Job | Follow Ethereum, fetch updates, committee keys and inclusion proofs | Decide what LEZ accepts as a finalized Ethereum header |
-| Trusted by LEZ | No. It is untrusted data delivery. | Yes. Every LEZ node checks it. |
+Caisson Stake, restakers and challengers make up the restaking side, isolated from the light
+client.
 
-The heavy computation moves to the operator. The trust decision stays on LEZ.
-
-- The proof must be for the deployed program's image.
-- `Advance` is accepted only from the program's own actor (`from_own_program()`). LEZ ties the
-  proof to the deployed image, so it can't come from a lenient fork.
-- `Advance` is accepted only on top of the store the instance currently holds.
-
-#### 2. State
-
-Each **instance** is a public actor of the program. It holds:
-
-- the checkpoint, chain ID, fork schedule and finality parameters, written once at Init and
-  never changed (F.9, F.13)
-- the current and next committee roots, which are **32 bytes each**; the 512 keys are never
-  stored
-- the latest finalized header
-
-Its ID is `H(checkpoint ‖ config)`. That makes IDs impossible to squat, and lets several
-instances (mainnet, Sepolia, Hoodi) coexist under one program (F.14, F.15).
-
-**Header records** are immutable accounts, 184 bytes of state each:
-
-- the instance, chain ID, slot, beacon root, block number, `state_root`, `receipts_root`, and
-  the execution block hash, which history proofs start from (section 8); the signer count is
-  added in M1 (section 10)
-- at an address derived from the program, the instance and the slot, so anyone can find a
-  record and no one holds a key to it
-- written once, only by the program, only after a verified update
-- never rewritten or removed, so an old statement stays valid forever (R.3), and every action
-  reads at most one record (P.9)
-
-#### 3. Update: what has to be proven
-
-An update must show all of the following:
-
-1. An attested header from the current period.
-2. At least 2/3 of the current committee signed it. The supplied keys must hash to the stored
-   root.
-3. The finality branch from the attested header to the finalized one.
-4. The execution branch from the finalized header to `state_root` and `receipts_root`. For
-   Gloas, `execution_block_hash` is proven at gindex 2856.
-5. At a handoff, the next-committee branch inside the attested state.
-
-A proof of new keys alone is never enough. The new keys are trusted only because the current
-committee signed a header containing them:
-
-```
-checkpoint → R_N → signs H → H contains R_{N+1} → …
-```
-
-Liveness needs at least one handoff per sync-committee period (27.3 h). A missed period stops
-the instance, and recovery is a fresh instance (F.10).
-
-#### 4. Update path A: proven (the operating mode)
+**Flow**
 
 ```mermaid
 sequenceDiagram
-    participant S as Submitter (any private account)
-    participant P as Program, private actor (proven by S)
-    participant I as Program, public instance actor
-    S->>P: Update { material }   (root call, hidden)
-    Note over P: full check: BLS, branches, handoff
-    participant R as Program, record account of the new header
-    P->>I: Advance { prev_store, next_store, block_hash }   (boundary message, published)
-    Note over I: accept only from own program,<br/>only if prev_store == current
-    I->>R: WriteRecord { record, block_hash }
-    Note over R: written once, only at the address<br/>its instance and slot derive
+    participant O as Operator
+    participant P as Caisson private actor, proven by O
+    participant I as Caisson instance, public
+    participant R as Header record, public and write-once
+    participant C as Consumer transaction
+    participant S as Caisson Stake, a separate program
+    O->>P: Update { light-client material }  (hidden root call)
+    Note over P: BLS aggregate, participation,<br/>finality, execution, handoff
+    P->>I: Advance { prev_store, next_store, block_hash }  (the one published message)
+    Note over I: only from its own program,<br/>only on top of the current store
+    I->>R: WriteRecord
+    C->>R: inclusion proof + predicate against the record
+    Note over C: statement with a nullifier-ready ID
+    S->>R: read-only record query
+    Note over S: restakers lock stake behind a record,<br/>challengers prove a false one
+    C->>S: Backing { instance, block_number }  (only if the consumer requires it)
 ```
 
-Measured in E1 on `v0.4.0-rc1`:
+The heavy computation sits with the operator. The trust decision stays on LEZ: the proof must
+be of the deployed, immutable program, and the instance accepts a new store only from its own
+program and only on top of the store it holds.
 
-| | Toy update (12.6M cycles) | Real mainnet update with handoff (12.9M cycles) |
-|---|---|---|
-| Public part | 9,547 cycles | 14,768 cycles |
-| Exec gas charged | 419,311 (409,764 flat + public part) | 424,532 (derived: 409,764 + 14,768) |
-| Storage gas | 224,063 | 224,063 |
-| Proving time | 895 s, 13.0 GB peak | **995 s, 14.1 GB peak** |
-| Transaction size | — | 227,451 B |
-| Update material | — | 52 KB, stays off-chain |
+### 2. Economic Analysis Of The Anchor
 
-Both were proven on an Apple M3 Max CPU with 64 GB of RAM.
+The light-client protocol's default anchor is the sync committee: 512 validators whose
+signatures a light client follows instead of the full validator set. This section measures what
+stands behind it, how much stake signs each header and how much of it a forger would lose, and
+what Caisson adds to it.
 
-Other E1 results:
+**Stake behind a signed header.** Every seat is a validator with an effective balance between 32
+ETH (the minimum to activate) and 2,048 ETH (the maximum since EIP-7251). A header needs 342
+signatures, so in the worst case a minimal forgery is signed by 342 validators at 32 ETH each:
+**10,944 ETH**. Real committees hold more; an example from mainnet closes this section.
 
-- Forged `Advance` (from another program) is refused.
-- Stale store is refused.
-- A replayed transaction is refused.
-- A blinded sender settles. Operators blind their account so the boundary message doesn't
-  reveal it.
-- **A losing racer is charged its full reserve.** That is what drives the deferral design in
-  section 9.
+**Today, nothing is burned.** The consensus spec has two slashable offences, proposer equivocation
+and attester double or surround votes. Sync-committee messages aren't among them, and no fork
+through Fulu adds one. A member that signs a fake header for a light client can still sign the
+canonical root for its duty, so it doesn't even give up its sync reward, about 0.21 ETH per seat
+per period (derived from EIP-8390's issuance figure).
 
-Proving time splits into about 233 s of fixed circuit overhead plus about 760 s for the BLS
-check. On a mid-range laptop (M3 Pro, 18 GB, CPU) the same proof takes **1,834 s (30.6 min)**
-at the default segment size and swaps about 5 GB (B1, measured). Smaller segments trade time
-for memory (B2, measured): 5.3 GB peak in 34.6 min at 2^19, 3.9 GB in 48 min at 2^18. So an
-8 GB laptop can operate the module on CPU. A finality-only update, the common case, proves
-about 12% faster than one with a handoff (B3: 30.3 against 34.6 min at 2^19). GPU proving is to
-measure in M0.
+**If sync-committee lies were slashable.** EIP-7657 would slash the signers of conflicting
+sync-committee messages with the standard `slash_validator`. Under Electra that burns, per
+validator, `effective_balance / 4096` at once, plus a correlation penalty of
+`effective_balance × min(3 · S / T, 1)`, where `S` is all stake slashed within about 36 days and
+`T` is total stake (about 43.7M ETH, October 2026). The validator is also ejected. In the worst
+case, every signer at 32 ETH:
 
-**On a running node** ([node runs](https://github.com/vineetpant/lez-hello-world/blob/eb686e9a0b2a8cef05f0017aa9eb694ad5212346/rfp-021/results.md#node-runs-eth_lc-on-a-lez-v04-devnet-real-proofs)), with our prototype program `eth_lc`,
-live mainnet updates and real proofs, on the reference laptop at the default segment size:
-
-| | Handoff update, 510 signers | Finality update |
+| Signatures the forgery needs | Stake that signs | Burned |
 |---|---:|---:|
-| Proving + submit | 2,249.6 s (37.5 min) | 2,167.0 s (36.1 min) |
-| Peak memory | 8.6 GB | 9.3 GB |
-| Public part (`Advance`, plus the record write when the update finalizes a new header) | 38,431 cycles | 71,593 cycles |
-| Net charge (reserve − refund) | **5,378,064** | **5,643,360** |
+| 342, the protocol minimum | 10,944 ETH | **11 ETH** |
+| All 512 | 16,384 ETH | **22 ETH** |
+| 342 in each of two committees | 21,888 ETH | **38 ETH** |
 
-Times and memory are from the 3 Nov runs, on a quiet laptop. Cycles and charges are from the
-final design, with record accounts and block hashes, on 6 Nov ([final design](https://github.com/vineetpant/lez-hello-world/blob/eb686e9a0b2a8cef05f0017aa9eb694ad5212346/rfp-021/results.md#the-final-design-and-attestations-to-older-blocks-6-nov). The proven work is the same in both; the
-6 Nov times were slowed by the machine (a busy devnet node, sleep), so they aren't used.
+`burned = S × (1/4096 + 3 · S / T)`. The burn is 0.10–0.17% of the stake that signs, because the
+correlation penalty scales with the share of *all* stake slashed together. It only takes the
+whole balance once a third of all stake is slashed at once, about 14.6M ETH. That is exactly the
+Casper FFG case, and exactly what a 512-seat committee can never reach.
 
-The private fee is (409,764 + public cycles) × 8 + 224,063 × 8, so it is nearly flat: the
-proven work isn't metered, and only the public part varies. Both updates were confirmed by
-reading the instance and the new record account back. `eth_lc`'s public part is larger than
-E1's because it writes a record account; the finality update creates one, the handoff update
-here finalized nothing new and didn't.
+**How the anchors compare:**
 
-**Catch-up:** one private execution can verify several consecutive periods, so a stalled
-instance resumes in one transaction (R.7). To be measured.
+> **EIP-8390** (draft, created 22 Aug 2026, no fork named) would remove the sync committee and have
+> light clients verify a succinct proof of Casper FFG finality over the full validator set,
+> moving every header to the FFG row below. Caisson would adopt that anchor as a new program
+> version with new instances; records and statements already made stay valid.
 
-#### 5. Update path B: public split (fallback and measurement)
+| Anchor | Stake that signs a minimal forgery | ETH a forger loses |
+|---|---:|---:|
+| Sync committee, today | 10,944 | **0** |
+| Sync committee, if slashable (EIP-7657, stagnant since 2024) | 10,944 | **11**, plus ejection |
+| Casper FFG finality over the full validator set | at least a third of stake, ≈ 14.6M | **≈ 14.6M**: the correlation penalty takes all of it |
+| Sync committee plus restaked backing `B` (Caisson Stake, D1) | 10,944 + `B` | **`B`, in full** (plus 11 if EIP-7657 ships) |
 
-- The same verifier crate runs as public actor messages, spread across blocks. Each step must
-  fit `MAX_GAS_EXEC` = 10M, which caps both a transaction's gas limit and a whole block.
-- Measured split (B6): **prepare** runs every check except the pairing (4.93M cycles, hands
-  over 741 bytes), then **pairing** (7.85M). Two transactions in two blocks, at least 20 s.
-- Where the cycles go (B7): the pairing is 61% of an update and hash to G2 9%, even with the BLS
-  accelerator. A pairing precompile is the main lever (P.8).
-- It needs no prover, so anyone can advance the instance with only a consensus endpoint and LEZ
-  gas (F.11, S.7).
-- It produces the public numbers for P.2 and the precompile comparison for P.8. A precompile is
-  reachable only from public transactions.
-- **Both paths write the same header record.** Consumers can't tell which path wrote it.
+These figures are per header, not per consumer. One forged header exposes every consumer that
+accepts its record at once, so what guards a header has to be weighed against the value all of
+them place on it together.
 
-#### 6. Attestation
+**Decision D1: anchor on the sync committee, and ship a basic restaking program beside it that
+adds the capital the committee lacks.** The sync committee and restaked stake defend against different attacks, and
+each is weak exactly where the other is strong:
 
-The consumer program builds the predicate. The user or relayer supplies only the Ethereum proof.
+| | Sync committee | Restaked stake |
+|---|---|---|
+| Who signs | 512 seats drawn by RANDAO in proportion to stake, fixed a period ahead | Whoever chooses to lock stake behind a header |
+| Against coordination | Strong: a forger must corrupt at least 342 seats spread across many operators it didn't choose | Weak on its own: backers self-select, so stake can concentrate in a few parties |
+| Capital at risk | None today; 11 ETH in the worst case even with EIP-7657 | All of it, forfeited in full when a header is proven false |
+| Liveness | Signs every slot as a protocol duty | Depends on backers choosing to lock stake |
 
-- **Public:** the consumer's message to the program runs on the sequencer, with an MPT check
-  and predicates. Measured on mainnet vectors (B13): a receipt log costs 52–69k cycles, and a
-  storage slot plus its account 190k (0.5–1.9% of the 10M cap, P.1). Each extra predicate
-  costs about 1k.
-- **Private:** `AttestPrivate` runs on a private actor of the program, inside the consumer's
-  private transaction.
-  - The query, the Ethereum proof and the predicates are evaluated inside the proof and never
-    published.
-  - **One message crosses the boundary:** `CheckRecord { record, block_hash }`, a synchronous
-    call to that record's account. The account accepts it only from the program's own actors,
-    only at the address its instance and slot derive, and refuses unless it holds that record.
-    It carries the header record and nothing about the query.
-  - **The sender is blinded.** The private actor presents a fresh alias for each message
-    (`AccountId::blinded`, a new factor every time), so the consumer's account is never
-    published and two attestations by one consumer can't be linked through it.
-  - **Fees don't link either.** Refunds return to the fee payer's blinded alias, never to a
-    public account.
-  - **The check can't go stale.** Header records are immutable, so a record held when the
-    consumer proves is still held at inclusion (R.11).
-  - **What is published:** the program, the instance, which header record was used, and the
-    time. To keep the record from narrowing down the event, consumers attest against the newest
-    record and reach the event's block through history proofs (section 8). What is left is
-    "proved after that header", which the submission time already shows.
-  - **Alternative considered:** reading the record with a cross-boundary state read instead of
-    a call. It would publish the same thing, the record and a blinded reader, so it gains no
-    privacy. We use `CheckRecord` because it runs on v0.4 today.
-  - **F.8 evidence (M2):** every boundary crossing of a private attestation enumerated, and the
-    full public state diffed before and after.
-- **Measured on a running node** ([node runs](https://github.com/vineetpant/lez-hello-world/blob/eb686e9a0b2a8cef05f0017aa9eb694ad5212346/rfp-021/results.md#node-runs-eth_lc-on-a-lez-v04-devnet-real-proofs)), WETH storage slot plus account
-  against a header the instance verified, real proofs, reference laptop:
+So a header in the hybrid is trusted on two independent grounds: a randomly drawn
+supermajority signed it, and stake that is lost in full if it is false stands behind it. A
+forger then has to coordinate the committee and also put up, and lose, the backing.
 
-  | | Public | Private |
-  |---|---:|---:|
-  | Exec gas | 220,141 (2.2% of the cap) | 21,017 public cycles; the rest is proven |
-  | Transaction size | 7,378 B | — |
-  | Charge, accepted | **1,820,152** | **5,238,752** net |
-  | Time | included in 8–14 s | 751.5–876.1 s proving + submit |
-  | Peak memory | — | 7.5–9.0 GB |
-  | Charge, refused | **16,059,024** (the whole gas limit) | 0: nothing is submitted |
+Caisson anchors on the sync committee, as the light-client protocol and this RFP expect, and
+adds restaking as a separate program, **Caisson Stake**, isolated from the light client. It only
+reads header records, so advancing the sync committee, writing records and attesting work the
+same with or without it, and consumers that don't require backing never touch it.
 
-  Charges are for the final design: record accounts with block hashes (6 Nov). The ring-based
-  prototype of 3–4 Nov cost 1,853,184 and 5,271,592.
+```mermaid
+flowchart LR
+    subgraph CA["Caisson: the light client"]
+        U["Updates"] --> I["Instance"] --> R["Header records"]
+    end
+    subgraph CS["Caisson Stake: a separate program"]
+        B["Restaked backing and challenges"]
+    end
+    B -- "read-only record query" --> R
+    K["Consumer"] -- "Attest" --> R
+    K -. "backing, only if required" .-> B
+```
 
-  - Honest attestations were accepted on both paths. A tampered proof and a false claim were
-    refused on both: reverted in their block on the public path, unprovable on the private
-    one, so the wallet never sent them. A header the instance never verified was refused on
-    the private path.
-  - On the public path a refusal is charged the whole gas limit, 8.8× an accepted one. So the
-    CLI dry-runs the check before submitting and stops on a refusal (U.2, measured). Setting a
-    tight gas limit as well is M3 work.
-  - **The design above, on the node** ([what it publishes](https://github.com/vineetpant/lez-hello-world/blob/eb686e9a0b2a8cef05f0017aa9eb694ad5212346/rfp-021/results.md#what-a-private-attestation-publishes-f8)).
-    The private attestation crossed the boundary with one `CheckRecord` call from a one-time
-    alias, plus the fee reserve to the fee inbox from another, and its refund went to the
-    payer's alias. A search of the whole transaction, proof included, found none of the
-    wallet's private accounts, the payer, the queried address, the slot or the proof leaves.
-    The reserve amount is public; it is priced from the transaction's public part, so it
-    reveals nothing about the query.
-  - **Not tested:** a modified wallet that skips the local run and submits anyway. The
-    sequencer would then run the record check itself.
-  - **Minimum spec for a consumer's private attestation (P.4),** which is the proving a
-    Basecamp user's own machine does. Measured peak: 7.5–9.0 GB at
-    the default segment size, 12.5–14.6 min on the reference laptop (M3 Pro, 18 GB, CPU). We
-    declare 16 GB of RAM, CPU proving, as the supported minimum today, with a light desktop
-    load: with two browsers open, the reference laptop swapped and a proof took about 3×
-    longer. Smaller segments brought an update down to 3.9 GB (B2); the same setting is
-    measured for the attestation in M2, aiming at 8 GB.
-- **Verified once, used many times.** Attestation never re-verifies an update or its
-  signature. It trusts a header record because only the program writes it, and only after
-  verification.
-- **R.11 (independent submissions):** header records are immutable and attestation writes no
-  shared state. Several private attestations can land in one block, and each can compute its
-  result before inclusion.
+### 3. Advancing Finality
 
-#### 6b. Recorded statements and batching (soft #1, #2)
+E1, by Shoaib Ahmed
+([`logos-explorations/rfp-021/e1`](https://github.com/hu55a1n1/logos-explorations/tree/d035841b1efe484db91956eee2a9f47b305dcba3/rfp-021/e1)),
+ran a real mainnet update with a committee handoff as a private LEZ `v0.4.0-rc1` transaction,
+through the sequencer's own settlement code:
 
-Neither is built or measured yet. Both are designed so they add no second verification path.
-
-**Recorded statements (soft #1).** A `Record` instruction runs the same `evaluate` call as
-`Attest`, against the same header record, and writes the resulting statement to a write-once
-account at an address derived from the instance and the statement ID.
-
-- **One verification core.** The direct path and the recorded path call one function, so the
-  audit surface and the cost profile stay common. The cost is the B13 attestation cost plus one
-  new account. For scale, a new header record account (184 B) added about 146k to an update's
-  net charge on the node (decision D8). A statement account is of similar size.
-- **What a reader trusts.** Only the program can write the account, and only after the check,
-  so a reader trusts the program, not whoever paid for the write. A reader is still acting on a
-  result computed in an earlier transaction, which the direct path never asks of it (F.7). The
-  consumer docs say so, and recommend the direct path wherever the attestation's cost isn't the
-  constraint.
-- **Privacy.** The recorded statement is public by design. A consumer that needs F.8 uses the
-  private direct path.
-
-**Batching (soft #2).** `Attest` and `Record` take a list of queries over one header record.
-The record is read once, its check against the instance is made once, and each query costs only
-its own Merkle-Patricia proof and predicates. On the private path, a batch is one proof and one
-`CheckRecord` crossing for all its queries, so it publishes no more than a single attestation.
-To measure in M2: the per-query saving on the public path, and proving time against batch size
-on the private path.
-
-#### 7. Predicates and statements
-
-A consumer sends a **query**: the chain ID it expects, one inclusion proof, and a list of
-predicates that must all hold. The program returns a **statement**: its ID, the chain ID, the
-block number and the predicates that held. The consumer builds the query. The module never
-changes to support a new one (F.4).
-
-**What the prototype runs today** (`sextant-core`'s `statement.rs`, every measured attestation):
-
-- **Fields:** account balance and nonce, a storage slot's value, a log's address, its topic
-  *i*, and its 32-byte data word *i*.
-- **Values:** 32-byte big-endian words, compared as unsigned integers.
-- **Comparisons:** `= ≠ < ≤ > ≥`, ANDed over the predicates of one proof.
-- **A reverted transaction's logs** are refused (`PredicateFalse`), since they prove nothing
-  happened.
-
-**Added in M2, for the delivered interface:**
-
-- **Fields:** account code hash, a byte offset and width for packed slots, a log's topic count
-  and data length.
-- **Values:** signed integers (two's complement) and addresses as typed values, beside raw words.
-- **Compound statements (soft #4):** AND over several proofs under one header, such as an
-  account balance plus a storage slot, in one statement.
-- **Helpers:** Solidity mapping-slot derivation in the client library, so consumers don't
-  compute storage keys by hand.
-
-**Statement IDs carry a nullifier-safety class** (F.6, S.4). Each ID is a domain-separated
-hash, so the two classes can never collide:
-
-- **Log statements:** an ID over the chain ID, the block, the transaction index, the log index
-  and the log content. There is one ID per occurrence, so it is safe as a one-shot nullifier.
-  The prototype keys the block by number. The delivered interface keys it by the execution
-  block hash, which the header record already carries, so an ID means the same thing whichever
-  instance produced it.
-- **State statements:** an ID over the chain ID, the address, the slot and the attested values.
-  The same state gives the same ID at any finalized block, as F.6 requires, so the same value at
-  two different times collides.
-  - The docs mark these IDs "unsafe as a one-shot nullifier unless the slot is write-once".
-  - The reference vault uses a write-once deposit mapping.
-
-**Same verdict off-chain.** The CLI's dry run calls the same `evaluate` function, compiled
-natively, so a query refused on-chain is refused off-chain with the same code (U.2).
-
-**Reference consumers (U.6):**
-
-- **ERC-20 deposit:** a `Transfer` log to the vault.
-- **Native ETH:** the vault's `receive()` emits `Deposit(sender, amount, nonce)`.
-  - `msg.sender` is the real sender, including Safe, ERC-4337 and EIP-7702 accounts.
-  - No transaction-trie parsing and no secp256k1 recovery sit in the trusted path.
-
-**Typed errors (U.5).** Every refusal is one code, the same in the program, the CLI's dry run
-and the docs:
-
-| Failure mode (U.5) | Code |
+| Result | Figure |
 |---|---|
-| Header not finalized | `NotFinalized` |
-| Sync-committee signature invalid | `BadSignature`, `BelowParticipation` |
-| Committee handoff not verified | `HandoffNotVerified`, `BadCommitteeBranch`, `CommitteeMismatch` |
-| Checkpoint stale or wrong | `CheckpointStale`, `CheckpointMismatch` |
-| Inclusion proof invalid | `BadInclusion`, `BadExecutionBranch` |
-| Predicate not satisfied | `PredicateFalse` |
-| Chain-ID mismatch | `ChainMismatch` |
-| Malformed input | `Malformed`, `BadKey` |
-| Update already applied (R.8) | `AlreadyApplied` |
+| The update check, proven privately | **14,058,921 cycles** |
+| Exec gas, through the block fee path | **429,723** (409,764 flat plus the 19,959-cycle public part) |
+| Storage gas | **224,063** for the zk receipt |
+| Proving (on Apple M3 Max) | 1,107 s, 13.1 GB peak |
+| Proving (on RTX 4090, 24 GB, CUDA 12.4, r0vm 3.0.6 built with CUDA) | 30.2 s |
 
-Measured on the node: the CLI's dry run of a public attestation returns the code the program
-refuses with (`BadInclusion` for a tampered proof, `PredicateFalse` for a false claim), and
-stops before submitting. v0.4 blocks record that a transaction reverted but not why, so the dry
-run is also where a consumer reads the code.
+**Decision D2: the update runs in a private actor of the program, proven by the operator, and
+lands as one transaction.** The check takes 14.1M cycles. LEZ `v0.4.0-rc1` caps exec gas at 10M
+(`MAX_GAS_EXEC`), both for a single transaction's gas limit and for the total of a whole block,
+so the check can't run as a public transaction. Run privately, the sequencer verifies one receipt
+for a flat charge whatever the private part computed: 429,723 exec gas.
+Running privately also keeps the load off the network. The 14.1M-cycle check runs once, on the
+operator's prover. The sequencer and every indexer that replays the block only verify the receipt
+and run the 19,959-cycle `Advance`.
 
-#### 8. Historical state (soft #3)
+### 4. Core Data Structures
 
-An attestation can target any finalized block, not only one the instance recorded. That is
-what lets the instance run on two updates per period (section 9).
+Each account's object is Borsh-encoded, and stores the values its address is derived from, so it
+can recompute its own address and refuse to act anywhere else.
 
-- **Primary, the 8,191 blocks before a record: EIP-2935.** The history contract, live since
-  Pectra on mainnet, Sepolia and Hoodi, keeps the last 8,191 block hashes in state. A storage
-  proof under the record's `state_root` gives the target's block hash. The target's RLP header,
-  which must hash to it, gives its `state_root` and `receipts_root`, and the attestation
-  proceeds against those. It is the same storage-proof code a slot attestation uses, plus the
-  RLP decode the verifier already has for Gloas.
-- **Fallback, any distance: a parent-hash chain.** The consumer supplies the headers from the
-  record back to the target, each checked against its child's `parentHash`. It depends on
-  nothing but Ethereum's header hashes, so it also covers a chain without EIP-2935 (F.14). The
-  cost grows with the distance, about one keccak and 600 bytes a block. On the public path that
-  suits short gaps; on the private path the work is inside the consumer's proof, which the fee
-  doesn't meter, so it costs proving time only.
-- **Older than about 27 h:** beacon `historical_summaries`.
-- **Measured on the node** ([final design](https://github.com/vineetpant/lez-hello-world/blob/eb686e9a0b2a8cef05f0017aa9eb694ad5212346/rfp-021/results.md#the-final-design-and-attestations-to-older-blocks-6-nov), real proofs, 6 Nov):
-
-  | Target | Public | Private |
-  |---|---:|---:|
-  | The record's own block | 1,820,152 (220k exec gas, 7.4 KB) | 5,238,752 |
-  | 1,000 blocks back, EIP-2935 | **3,288,376** (397k exec gas, 13.7 KB; 4.0% of the cap) | **5,238,752** |
-  | 3 blocks back, parent-hash chain | **2,507,576** (303k exec gas, 10.0 KB; 3.0% of the cap) | **5,238,752** |
-
-  All accepted, all publication checks passed (the target's header and history slot are not
-  in the transaction), and a forged history header was refused on both paths
-  (`BadExecutionBranch`). In private, reaching an older block costs nothing extra: the history
-  proof is checked inside the consumer's proof, the published part is the same `CheckRecord`,
-  and proving took the same 803–810 s.
-- **Also tested natively** ([`tests/history.rs`](https://github.com/vineetpant/lez-hello-world/blob/eb686e9a0b2a8cef05f0017aa9eb694ad5212346/tests/history.rs), 6 tests,
-  passing, on pinned mainnet blocks). EIP-2935 reaches a block 50 back from the record, and a
-  parent-hash chain one 3 back. A forged header, the slot of another block, another contract,
-  a target outside the window, a broken link and the wrong anchor are each refused. The
-  record carries its execution block hash, verified inside the update's proof, so the chain
-  starts from a hash the program checked.
-
-#### 9. Operator daemon (U.3, R.4, R.5, R.8–R.10)
-
-The daemon is a Logos module plus a Logos Core headless CLI.
-
-- It follows Ethereum through the core module and tracks the instance from LEZ events
-  (LP-0012).
-- **Cadence: two updates per sync-committee period (27.3 h), 642 a year.**
-  - the mandatory handoff
-  - one about 13.7 h later, so consecutive records stay well inside the 8,191-block history
-    window and every block between them can be proven from the later one (section 8)
-  - on demand, for an event newer than the latest record, paid by whoever needs it: about
-    0.48M exec gas
-  - Tracking costs about 11.3M a period at the base-fee floor, 0.001% of the period's exec
-    capacity ([B12a](https://github.com/vineetpant/lez-hello-world/blob/eb686e9a0b2a8cef05f0017aa9eb694ad5212346/rfp-021/results.md#b12a-amortised-tracking-cost-p3)). There is no heartbeat.
-- **Re-check before submit (R.9):** a losing racer pays its whole reserve (E1). The daemon
-  re-reads the instance immediately before sending and keeps its reserve tight.
-- **Deferral (R.10):** a per-instance randomized delay spreads cost across operators.
-  Documented with its effect on latency.
-- **Restart (R.4, R.5):** the daemon resumes from the instance on LEZ. It never re-verifies from
-  the checkpoint and never repeats work already applied.
-
-#### 9b. Operator incentive (soft #5)
-
-Liveness doesn't depend on this. Anyone can still advance an instance by paying the gas. It
-gives operators a reason to keep doing so.
-
-- **Pool.** Each instance has a bounty pool: a PDA of the program, seeded by the instance ID.
-  Anyone can fund it with an ordinary native-token `Transfer`: consumers, protocols that depend
-  on fresh headers, or a grant.
-- **Payout.** A successful `Advance` pays the recipient the update names, using
-  `custody_transfer` from the pool. The fee program uses the same primitive.
-  - The amount is `min(pool, rate × Δslots, cap)`, where Δslots is how far the new finalized
-    header is past the previous one.
-  - `rate` and `cap` are part of the instance's immutable config.
-  - The payout grows with how stale the instance was, measured in Ethereum time, which the
-    update itself proves. No LEZ clock read is needed.
-- **Why it grows with staleness.** An operator submits once the payout covers its cost (about
-  478k exec gas plus storage). Operators with different costs reach that point at different
-  moments, which spreads submissions over time instead of starting a race. Frequent tiny updates
-  earn tiny payouts, so there's nothing to gain from spamming.
-- **Permissionless (F.11).** No registration and no allow-list. Whoever lands the `Advance`
-  claims the payout. The `pre_state == prev` check already selects exactly one winner per step.
-- **Racing.** A losing submitter still pays its reserve. The bounty doesn't change that, so the
-  re-check and deferral of section 9 stay.
-- **Attestation fee, optional per instance.** A consumer can add a flat transfer to the pool in
-  its own transaction. In a private attestation that is one more boundary crossing. A flat
-  amount reveals nothing about the query.
-- **Known limits.**
-  - The recipient is credited asynchronously, in a later transaction.
-  - The payout recipient is public, so a submitter that wants privacy names a fresh account.
-  - Funding is voluntary. An unfunded pool pays nothing, and the system behaves as without
-    the bounty.
-
-#### 10. Security model (S.6, VS.1–VS.6)
-
-- **Fabricated chain (VS.1):** an explicit adversarial test. A self-consistent header plus
-  inclusion proof over state that was never finalized must be rejected.
-- **Committee attack cost.** Following the chain through the sync committee trusts that at
-  least 342 of its 512 members are honest. Sync-committee signatures are not slashable today,
-  so a dishonest signature costs a member little beyond the reward for that slot. There are two
-  ways to get 342 signatures on a header that was never finalized:
-  - **Luck.** An entity holding stake share *f* draws seats roughly as Binomial(512, *f*). The
-    chance of drawing ≥ 342 seats in one period (27.3 h; 321 periods a year):
-
-    | *f* | P(≥ 342) | P(≥ 410) | P(≥ 461) |
-    |---|---|---|---|
-    | 0.33 | 6e-55 | 4e-106 | 1e-160 |
-    | 0.50 | 1e-14 | 5e-45 | 6e-84 |
-    | 0.60 | 9e-4 | 2e-22 | 2e-52 |
-    | 0.67 | 0.50 | 1e-11 | 3e-35 |
-
-    Below about 50% of stake this is negligible, even over a year of periods. At 60% it is about
-    25% per year at the default threshold. An entity with that much stake can already disrupt
-    Ethereum consensus itself.
-  - **Bribery.** Each committee is known about a period ahead. An attacker can pay 342 members,
-    or the few large operators that control many seats, to sign a false header. The cost is
-    whatever those members accept, not stake at risk. We state this plainly. Security for
-    high-value consumers comes from the defences below, not from a dollar figure.
-- **Consumer defences (VS.4).** The record carries the update's signer count (added in M1;
-  the prototype's record doesn't have it yet). A consumer chooses its own policy:
-  - **A higher participation threshold.** For example, 410 (80%) or 461 (90%). An attacker then
-    needs that many seats, which moves the luck columns above by tens of orders of magnitude.
-    The four mainnet updates in E1's vectors had 510–512 signers. A larger sample, measured in
-    M1, sets how often a high threshold costs liveness.
-  - **The two-committee rule.** Act only on a header that the next committee has also built on.
-    An attacker then needs supermajorities in two independently drawn committees: the luck
-    probability is squared, and the bribe covers two sets of members.
-  - **Value caps** per header or per period, for consumers that need neither.
-  - **A freeze authority on the consumer side,** as RFP-022 specifies for the bridge: the
-    consumer can pause acting on new statements while a suspected committee attack is
-    investigated. It lives in the consumer, never in this module, so it can't censor other
-    consumers or touch the tracked state.
-- **What a compromised committee can and can't do (VS.4).** It can get the instance to record a
-  header that was never finalized, and so make false statements verifiable from that record on.
-  It can't alter records already written, or statements already consumed, and it can't move the
-  instance's checkpoint or config. Exposure is bounded by the consumer defences above. Recovery
-  is a fresh instance from a checkpoint before the attack, and consumers rebinding to it (F.10).
-- The table is reproducible from the binomial tail:
-  `sum(comb(512, i) * f**i * (1 - f)**(512 - i) for i in range(k, 513))`.
-- **No swappable verification (VS.3):** no `ProgramId` is held in mutable state. Instances are
-  immutable. Migration is to a new program version plus a new instance. The Recommended Consumer
-  Pattern (S.4) carries the same rule for consumers. A consumer pins this module's program ID and
-  instance at its own deployment. If it kept either in mutable state, whoever controls that
-  state could point it at a module that attests to anything. The reference consumers (U.6) pin both.
-- **Immutable deployment.** `from_own_program()` compares program addresses, not code, so the
-  program is deployed with `ProgramHeader.immutable = true`. LEZ v0.4's loader then refuses
-  `UpdateHeader` on it (`program_loader/core/src/lib.rs:93`). Segments and headers are
-  write-once, so nothing else in the protocol can change the program. A protocol upgrade of LEZ
-  itself is outside this guarantee, and the trust document says so.
-- **Config bound to the instance.** The checkpoint, chain ID, fork schedule and participation
-  threshold are part of the instance state that `Advance`'s `prev` must match, and part of
-  the instance ID. A submitter can't supply a weaker config.
-- **Already exercised** ([`tests/adversarial.rs`](https://github.com/vineetpant/lez-hello-world/blob/eb686e9a0b2a8cef05f0017aa9eb694ad5212346/tests/adversarial.rs), 13
-  tests, passing, natively on the recorded mainnet vectors, against the verifier our prototype
-  runs). Each asserts the exact error, next to an honest control that passes:
-  - **VS.1:** a fabricated chain, self-consistent throughout. A fabricated execution state root
-    is committed in the finalized header, that header in the attested state, and the attested
-    header is signed by all 512 keys of a committee we generated. Refused: `CommitteeMismatch`.
-    The control: against a store that trusted that committee, the same update verifies, so the
-    refusal comes from the committee chain back to the checkpoint. A fabricated checkpoint
-    header: `CheckpointMismatch`.
-  - **VS.2:** a committee never handed off (`HandoffNotVerified`), a forged next committee
-    (`BadCommitteeBranch`), 341 of 512 signers (`BelowParticipation`), a header not finalized
-    (`NotFinalized`), a tampered state or receipts root (`BadExecutionBranch`, and
-    `BadInclusion` against a record), a proof replayed to another chain (`ChainMismatch`; an
-    update under another chain's domain, `BadSignature`), and a predicate over state the proof
-    doesn't cover (`Malformed`; another slot, `BadInclusion`).
-  - In M1 the suite also runs through the deployed program on a devnet. The attestation cases
-    already do: tampered proof, false claim and unheld record were refused on the node.
-
-#### 10b. Off-chain participants (F.12)
-
-| Participant | What it does | Safety or liveness | If it declines or misbehaves |
+| Object | Once per | Stored as | Passed |
 |---|---|---|---|
-| Checkpoint supplier (whoever runs `Init`) | Picks the weak-subjectivity checkpoint and config | **Safety**, once, at `Init` | A wrong checkpoint gives an instance of the wrong chain. Consumers verify the checkpoint through the core module's API (F.9) before binding to an instance, and a bad instance is never fixed in place, only replaced (F.10, F.13) |
-| Beacon API source | Serves light-client updates and committee keys | Liveness | Everything it serves is verified. Any beacon node, ours or public, serves the same data |
-| Operator (update submitter) | Proves and submits updates | Liveness | Anyone can submit, with no registration (F.11). The public split path needs no prover, only a consensus endpoint and LEZ gas |
-| Execution RPC | Serves `eth_getProof` and receipts | Liveness | Every proof is checked against a verified record. Any archive or full node serves them |
-| Consumer's prover (private path) | Proves the consumer's own transaction on the consumer's machine | Liveness, for that consumer only | No third party sees the query |
-| Relayer (public path, optional) | Submits a consumer's attestation | Liveness | The consumer can submit it directly |
-| Sync committee | Signs headers | **Safety**: the honest-supermajority assumption | Section 10: attack cost and consumer defences |
+| Instance configuration | Instance | Public PDA at the instance ID; written once, at `Init` | In `Init`, a public transaction |
+| Consensus state | Verified update | Public PDA keyed by execution block number; written once, by the update that reached it | The operator names the state it builds on; a copy goes into `Update` as private input, the new state out in `Advance` |
+| Committee | Sync-committee period | Public PDA, the root only; written once, at `Init` or its handoff | The 512 keys go into `Init` or `Update` as private input, checked against the root |
+| Finalised header | Verified header | Public PDA; written once, by the update that finalised it | Public path: `Attest` is sent to it. Private path: private input to `AttestPrivate`, confirmed by `CheckRecord` |
+| Predicate | Claim | Not stored | Inside the claim |
+| Claim | Consumer transaction | Not stored | Public path: in `Attest`, visible in the transaction. Private path: private input to `AttestPrivate`, never published |
+| Verified statement | Holding claim | Not stored | Public path: the `Attested` reply and event. Private path: returned inside the consumer's proof |
+| Events | Update or public attestation | In the block's events, not in accounts | Emitted by the program's handlers |
 
-No participant other than the checkpoint supplier and the sync committee can affect safety, and
-each liveness role can be filled by anyone. So no party, alone or as a class, can stop an
-attestation from eventually being produced: a consumer who needs a header can fetch the update
-and submit it itself.
+Nothing is overwritten. Every account is written once and never removed, so a statement valid
+when produced stays valid (R.3), and an unadvanced instance keeps every state and header it has
+verified (R.7).
 
-#### 11. Reuse assessment (R.6)
+#### 4.1 Instance Configuration (F.9, F.13–F.15)
 
-TODO (team): confirm which base the build uses. The evaluation below is scoped either way.
+**Decision D3: the instance ID is the address `PDA(program, H(checkpoint ‖ config))`, where the
+configuration account sits.** The address commits to its contents, so an instance can't be squatted with a weaker
+configuration and anyone may initialise it. Mainnet, Sepolia and Hoodi instances coexist under
+one program, each bound to its own chain (F.14, F.15).
 
-**What our numbers ran on.** Every update and attestation figure in this proposal, E1's and
-ours, ran on `sextant-core`: the light-client verifier from the Sextant prototype for RFP-021
-([edenbd1/lez-sextant](https://github.com/edenbd1/lez-sextant), MIT OR Apache-2.0), vendored
-unmodified. Our prototype program's design also follows Sextant's LEZ v0.3 program. It
-verified real mainnet updates and passes our adversarial suite, but it has not been audited.
+```rust
+// at instance_id = PDA(program, H(checkpoint ‖ chain ‖ finality))
+struct InstanceConfig {
+    checkpoint: Root,                // the beacon block root the instance starts from
+    chain: ChainBinding,
+    finality: FinalityParams,
+}
 
-**Candidates for the delivered module:**
+struct ChainBinding {
+    chain_id: u64,                   // execution chain
+    genesis_validators_root: Root,   // consensus network
+}
+
+struct FinalityParams {
+    genesis_time: u64,
+    forks: Vec<(u64, [u8; 4])>,      // (activation epoch, fork version), oldest first
+    min_participants: u16,           // 342 of 512
+    weak_subjectivity_period: u64,   // seconds; past it the instance is replaced (F.10)
+}
+```
+
+The account is written once and the program has no instruction that writes it again. A wrong or
+stale checkpoint is replaced by a new instance (F.10). The Logos Ethereum core module's
+checkpoint API checks the checkpoint here against public Ethereum sources.
+
+#### 4.2 Consensus State
+
+Each verified update writes a new consensus state, keyed by the execution block number it
+finalised, and never changes an old one:
+
+```rust
+// at PDA(program, H("state" ‖ instance ‖ block_number))
+struct ConsensusState {
+    instance: AccountId,             // instance_id
+    block_number: u64,               // the finalised execution block this state reached
+    parent: u64,                     // block_number of the state the update was built on
+    period: u64,                     // its sync-committee period
+    current_committee: Root,
+    next_committee: Option<Root>,    // once handed off
+    finalised_header: AccountId,     // its FinalisedHeader account
+}
+```
+
+An update names the state it builds on, is checked against that state's committee roots, and
+writes the state for the block it finalises. A second update reaching the same block finds that
+account written and is refused (R.8). Updates from one state to different blocks both stand,
+each a verified state the next update can build on. A consumer goes from the block number it
+already has to the state, and from there to the header. Each state holds roots and references
+only, so its size is fixed. An update brings the committee's 512 keys as private input and the
+program checks them against the stored root (section 8.3).
+
+#### 4.3 Committees
+
+`Init` and each verified handoff write the period's committee root to its own account:
+
+```rust
+// at PDA(program, H("committee" ‖ instance ‖ period))
+struct Committee {
+    instance: AccountId,             // instance_id
+    period: u64,
+    root: Root,                      // SSZ root of the 512 keys and their aggregate
+    handoff_slot: u64,               // the attested header that carried it
+}
+```
+
+Together these accounts are the verified handoff chain from the checkpoint forward, so anyone
+can audit which committee signed any header.
+
+#### 4.4 Finalised Headers
+
+**Decision D4: each verified finalised header is written once to its own account,** keyed by
+instance and execution block number, never rewritten or removed. It holds what an attestation needs and nothing
+else:
+
+```rust
+// at PDA(program, H("header" ‖ instance ‖ block_number))
+struct FinalisedHeader {
+    instance: AccountId,             // instance_id
+    chain: ChainBinding,             // a statement is refused on another chain or instance (F.5, F.15)
+    slot: u64,
+    beacon_root: Root,
+    block_number: u64,
+    block_hash: Root,                // history proofs start here (section 8.1)
+    state_root: Root,                // accounts and storage slots (F.3)
+    receipts_root: Root,             // logs (F.3)
+    signers: u16,                    // of 512, so a consumer can require more than 2/3
+    committee_period: u64,           // which committee signed
+}
+```
+
+An attestation reads this one account and nothing else, so no action's cost grows with stored
+state (P.9).
+
+#### 4.5 Predicates
+
+A predicate is a list of conditions on the values one fact establishes, all of which must hold
+(AND). The consumer writes it, so a new question needs no change to the module (F.4).
+
+```rust
+struct Condition {
+    subject: Subject,
+    op: Op,
+    rhs: [u8; 32],                   // uint, int (two's complement), address or bytes32, as a 32-byte word
+}
+
+enum Subject {
+    AccountBalance, AccountNonce, AccountCodeHash,
+    StorageValue { offset: u8, width: u8 },   // a packed field within the slot
+    LogEmitter, LogTopic(u8), LogDataWord(u8), LogTopicCount, LogDataLength,
+}
+
+enum Op { Equal, NotEqual, Less, AtMost, Greater, AtLeast }   // F.4: at least = and ≠
+```
+
+A subject the fact doesn't carry is refused (`MalformedInput`), never read as zero.
+
+#### 4.6 Claim
+
+A claim is what the consumer asks in its own transaction (F.7): one or more facts to prove
+against one finalised header, each with the predicate it must satisfy. Several facts make a
+compound claim (soft #4).
+
+```rust
+struct Claim {
+    chain_id: u64,                   // the chain the consumer expects; refused on another (F.5)
+    facts: Vec<Fact>,                // each proven under the same header; all must hold
+}
+
+struct Fact {
+    proof: Proof,                    // what is proven
+    conditions: Vec<Condition>,      // what must hold of the values it establishes
+}
+
+enum Proof {
+    Log { tx_index: u64, receipt: Vec<u8>, proof: Vec<Vec<u8>>, log_index: u64 },   // under receipts_root
+    Storage { address: [u8; 20], account: EthAccount, account_proof: Vec<Vec<u8>>,
+              slot: Root, value: Root, storage_proof: Vec<Vec<u8>> },              // under state_root
+    Account { address: [u8; 20], account: EthAccount, account_proof: Vec<Vec<u8>> },
+}
+```
+
+A log from a reverted transaction proves nothing and is refused (`ConditionUnsatisfied`). Every failure is a typed
+refusal (U.5).
+
+#### 4.7 Verified Statement
+
+A claim that holds becomes a statement. It returns to the consumer inside the same transaction,
+on both paths, and is not stored except on the soft #1 path (section 8.7).
+
+```rust
+struct Statement {
+    instance: AccountId,             // instance_id: the instance whose header was used (F.15)
+    chain_id: u64,                   // the chain it is about (F.5)
+    block_number: u64,               // the block the facts were proven under
+    facts: Vec<ProvenFact>,          // one per fact, in the claim's order
+}
+
+struct ProvenFact {
+    class: Class,
+    id: Root,
+    conditions: Vec<Condition>,      // what was asserted of it
+}
+
+enum Class {
+    Occurrence,                      // logs: one ID per event, safe as a one-shot nullifier
+    State,                           // storage, account: same state, same ID at any block
+}
+
+// F.6: a hash of the Ethereum state each fact proves, and nothing else
+id = SHA-256("eth_lc/statement/v1" ‖ chain_id ‖ kind ‖ fields)
+//   storage  (0): address ‖ slot ‖ value
+//   log      (1): block_hash ‖ tx_index ‖ log_index ‖ emitter ‖ n_topics ‖ topics ‖ len(data) ‖ data
+//   account  (2): address ‖ nonce ‖ balance ‖ code_hash
+```
+
+The ID leaves out the conditions, the header used, the instance, the path and the proof bytes.
+Two consumers asking different questions about one deposit, an instance and its replacement,
+and the public and private paths all give one fact the same ID, so it can't be consumed twice
+through any of them. Fixed widths, length prefixes and the kind tag make the encoding injective,
+so distinct state gives a distinct ID.
+
+**Decision D5: each fact's ID carries a nullifier-safety class (F.6, S.4).** The kind tag
+separates the classes, so they never collide. An occurrence ID is one per event, so it is safe
+as a one-shot nullifier. A state ID is the same at any block, as F.6 requires, so the same value
+at two times gives the same ID; it is safe as a one-shot nullifier only for state written once.
+Nullifiers belong to the consumer: a consuming program keeps them in its own accounts, keyed by
+the fact's ID, and checks the class first.
+
+#### 4.8 Events
+
+Following LP-0012, so that operators and indexers follow an instance without polling accounts:
+
+```rust
+enum Event {
+    CommitteeHandoff { instance: AccountId, period: u64, committee_root: Root },   // instance: instance_id
+    HeaderFinalised { instance: AccountId, block_number: u64, header: AccountId }, // instance: instance_id
+    Attested { statement: Statement },   // public path only; a private attestation emits nothing
+}
+```
+
+### 5. Attestations
+
+The `eth_lc` prototype, by Vineet Pant
+([`lez-hello-world/rfp-021/results.md`](https://github.com/vineetpant/lez-hello-world/blob/1b8b5cb42ac955aa7f35e9ff6e529fe08c1ea48c/rfp-021/results.md)),
+ran public and private attestations of a WETH storage slot on a LEZ `v0.4.0-rc1` devnet against
+live mainnet, with real proofs.
+
+**A public consumer transaction** runs the claim on the sequencer: the Merkle-Patricia check and
+the conditions, against one finalised header, inside the consumer's own transaction. Nothing
+needs proving on the consumer's machine.
+
+| Public attestation | Exec gas | Storage gas |
+|---|---:|---:|
+| Storage slot with its account | **301,115** | 7,514 |
+| Account | TODO | TODO |
+| Receipt log | TODO | TODO |
+| Each extra condition | TODO | TODO |
+
+**A private consumer transaction (F.8)** proves the same check on the consumer's own machine:
+
+- The claim, the Ethereum proof and the conditions are checked inside the consumer's proof.
+- One message crosses to public state: `CheckRecord { instance, header }`. It is a synchronous
+  call to the account of the finalised header the claim was proven against, at
+  `PDA(program, H("header" ‖ instance ‖ header.block_number))`. The account accepts the message
+  only from the Caisson program's own actors, and refuses it unless the header it holds equals
+  `header`. The message carries nothing about the claim.
+- The sender presents a fresh alias for each message, so the consumer's account is never
+  published and two attestations by one consumer can't be linked through it. Refunds go to the
+  fee payer's blinded alias, never to a public account.
+- Finalised headers are immutable, so a header held when the consumer proves is still held at
+  inclusion, and several private attestations can land in one block (R.11).
+- What is published: the program, the instance, which finalised header was used, and the time.
+
+| Private attestation | Exec gas | Proving | Peak memory |
+|---|---:|---:|---:|
+| Storage slot with its account | **430,045** | 873.2 s | 7.3 GB |
+| Account | TODO | TODO | TODO |
+| Receipt log | TODO | TODO | TODO |
+
+Every private attestation pays 409,764 exec gas to verify its receipt plus its public cycles
+(20,281 for the storage slot, the `CheckRecord`), and 224,063 storage gas for the zk receipt.
+
+*Ref. Apple M3 Pro, 18 GB, proving on CPU.*
+
+**The Merkle-Patricia check alone.** Outside LEZ, the same checks run as a RISC Zero guest on
+recorded mainnet (block 26376237), with one condition each
+([`caisson/experiments/mpt-zkvm`](https://github.com/congruence/caisson/tree/main/experiments/mpt-zkvm)):
+executed for the public path's cycles, and proven to a succinct receipt for the private path.
+
+| Check | Public: cycles | Of which, the check | Input | Proving | Peak memory |
+|---|---:|---:|---:|---:|---:|
+| Account | 153,931 | 135,599 | 4,028 B | 46.0 s | 5.2 GB |
+| Storage slot with its account | 270,062 | 244,617 | 7,104 B | 59.4 s | 5.9 GB |
+| Receipt log | 61,074 | 49,801 | 1,743 B | 39.6 s | 4.8 GB |
+| Each extra condition | +507 to +589 | — | +33 B | — | — |
+
+The rest of each public figure is reading the input. Each receipt is 223,362 bytes.
+
+*Ref. Apple M4 Pro, 14 cores, 48 GB, proving on CPU with `r0vm` 3.0.5.*
+
+**Minimum spec for a private attestation (P.4).** 7.3 GB peak and 14.6 min on the reference
+laptop. We declare 16 GB of RAM, CPU proving, with a light desktop load, as the supported minimum.
+
+### 6. Misbehavior And Freezing
+
+The sync protocol moves its finalized header to any newer slot that a supermajority of the current committee signed. It skips any ancestry check between the old header and the new one. Sync-committee signatures sit outside Ethereum's slashing rules, so a second chain costs the signers only the signatures. We freeze an instance when someone brings evidence that the committee the instance trusts signed a header that conflicts with one the instance stored (AKA equivocation).
+
+#### 6.1 Evidence
+
+Evidence of misbehaviour can be submitted in its own `Evidence` message. The message carries one light-client update plus the address of the stored account it conflicts with. It is very similar to `Update` except it checks against an older stored account and writes only the `Freeze` account.
+
+The instance keeps one header per execution block number and one committee per period. Evidence names the stored account by that key.
+
+| Evidence against the stored state | What we do |
+|---|---|
+| Stored header at the same block number, different `block_hash` | Freeze |
+| Stored header at the same block number, same hash, same slot, different `beacon_root` | Freeze |
+| Next committee for a period whose `Committee` account holds a different root | Freeze |
+| Header at a new block number | Apply as an update. Its ancestry is checked once the `block_roots` proof ships |
+| Stored header at the same block number, same hash, later slot | Ignore. Two Gloas slots name one execution block |
+| Optimistic head, LMD reorg, or the spec's force-update | Ignore. The core accepts finalized headers with a finality proof only |
+| Same beacon root, different `signature_slot` | Ignore. The signature covers the attested root only |
+| Evidence after its deadline | Reject. The instance stays live |
+
+Each freeze row is one account lookup: the header account stores `block_hash`, `slot` and `beacon_root`, and the committee account stores the root of its period.
+
+The lookups leave one gap. A fork at a new block number inside one period matches neither lookup, so the instance applies it as an update. The fix is a `block_roots` proof on the evidence transaction (one header's beacon state holds a different root at the other header's slot). `block_roots` covers 8,192 slots, i.e. one sync-committee period, and the branch is small next to the aggregate check. The same proof covers a fork at the same slot with a different block number. It ships after the lookups. Until then, detection covers the three freeze rows above.
+
+#### 6.2 Deadline
+
+Evidence must land before the update deadline of the stored side it conflicts with: the stored header's slot, or the committee's handoff slot, plus `weak_subjectivity_period`. The evidence transaction sets `timestamp_window(..deadline)`, the same bound `Update` uses. After the deadline, the committee's keys are expired, and a leaked key could sign a conflict for free. The deadline keeps such late evidence from halting a healthy instance. The LEZ sequencer clock sets the window, as the trust model already states: a late clock extends it, and an early clock closes it.
+
+#### 6.3 Freeze
+
+A valid piece of evidence writes one `Freeze` account at a PDA of the instance. Every `Update`, `hand_off` and `Attest` reads that account and proceeds only while it is empty. This adds one fixed read per transaction, so an attestation reads two accounts (P.9). The read stays constant as history grows.
+
+Freezing stops the instance and leaves every stored account in place. It names the conflict and leaves the choice of chain to consumers. A consumer moves to a new instance, anchored at a checkpoint before the conflict that `verify_new_checkpoint` accepts.
+
+### 7. Errors (U.5)
+
+Every refusal has one code, the same in the program, the CLI's dry run and the docs:
+
+| Failure mode | Code |
+|---|---|
+| Header not finalized | `UnfinalizedHeader` |
+| Sync-committee signature invalid | `InvalidSignature`, `InsufficientSigners` |
+| Committee handoff not verified | `UnverifiedHandoff`, `InvalidCommitteeProof`, `CommitteeKeysMismatch` |
+| Checkpoint stale or wrong | `StaleStore`, `CheckpointRootMismatch` |
+| Inclusion proof invalid | `InvalidInclusionProof`, `InvalidExecutionProof` |
+| Predicate not satisfied | `ConditionUnsatisfied` |
+| Chain-ID mismatch | `WrongChain` |
+| Malformed input | `MalformedInput` |
+| Update already applied | `UpdateNotNewer` |
+
+**Dry run (U.2, R.2).** The CLI runs the same `statement::check` the program does before
+submitting, so a refused claim returns the program's own error code (`InvalidInclusionProof` for
+a tampered proof, `ConditionUnsatisfied` for a false claim) and is never submitted. A refused
+private attestation can't be proven, so it costs nothing.
+
+### 8. Optimizations
+
+The core design above is complete on its own. These reduce what it costs to run and to use.
+
+#### 8.1 History Through EIP-2935, With A Parent-Hash Fallback (Soft #3)
+
+**Decision D6.** An attestation can target any finalized block, not only a recorded one.
+
+A claim on an older block is sent with an ancestry proof, which takes it from a finalised header
+back to the target block:
+
+```rust
+struct Ancestry {
+    eip2935_proof: StorageProof,     // the history contract's slot for the target, under the header's state_root
+    target: u64,                     // the target block number; fixes which slot the proof must open
+    target_header: Vec<u8>,          // the target's RLP header; must hash to the block hash the proof gives
+}
+```
+
+- **The 8,191 blocks before a record:** the EIP-2935 history contract, live since Pectra on
+  mainnet, Sepolia and Hoodi, keeps those block hashes in state. A storage proof under the
+  record's `state_root` gives the target's hash; the target's RLP header, which must hash to
+  it, gives its roots.
+- **Any distance:** a chain of headers from the record back to the target, each checked
+  against its child's `parentHash`. It depends on nothing but header hashes, so it also covers a
+  chain without EIP-2935 (F.14).
+- **Older than that:** beacon `historical_summaries`.
+
+*Evidence (node, real proofs, 6 Nov):*
+
+| Target | Public consumer | Private consumer |
+|---|---:|---:|
+| The record's own block | 1,820,152 | 5,238,752 |
+| 1,000 blocks back, EIP-2935 | 3,288,376 (397k exec gas) | **5,238,752** |
+| 3 blocks back, parent-hash chain | 2,507,576 (303k exec gas) | **5,238,752** |
+
+A private attestation reaches an older block at no extra charge: the history proof is checked
+inside the consumer's proof and the published part is the same `CheckRecord`. A forged history
+header was refused in both (`BadExecutionBranch`). Natively, six tests on pinned mainnet blocks
+cover EIP-2935 and the parent-hash chain and refuse a forged header, the wrong slot, another
+contract, a target outside the window, a broken link and the wrong anchor.
+
+#### 8.2 Two Updates Per Sync-Committee Period
+
+**Decision D7.** The instance takes the mandatory handoff plus one update about 13.7 h later,
+642 a year. Consecutive records stay inside the 8,191-block history window, so every block
+between them is provable from the later one. An event newer than the latest record gets an
+on-demand update, paid by whoever needs it.
+
+*Derived:* tracking costs about 11.3M a period at the floor base fee, about 0.001% of the
+period's exec capacity, shared by every attestation in it. Records grow 118 KB a year, 591 KB
+over five years; the instance doesn't grow (P.3, P.7).
+
+#### 8.3 Committee By Root; Keys Only As Private Input
+
+The instance stores each committee as its 32-byte SSZ root. The 512 keys arrive in the update's
+private input and are hashed against the root inside the proof, so they never touch public
+state or storage gas. The signing key is the committee aggregate minus the non-signers.
+
+#### 8.4 Proving On Modest Hardware
+
+Proving at a smaller segment size brings an update's peak memory down to 3.9 GB, at about 48
+minutes on the reference laptop, against 36–38 minutes and 8.6–9.3 GB at the default size.
+Operators choose the trade: an 8 GB
+laptop can operate the module, and a GPU or delegated prover (section 8.5) cuts the time.
+
+#### 8.5 Delegated Proving
+
+A prover can't forge an update; it can only fail to produce one. The update's program proof,
+about 760 of E1's 995 s, takes only public update material, while the privacy circuit's proof,
+about 233 s, needs the submitter's keys. The operator daemon (M3) can send the first to a remote
+or GPU prover and keep the second local.
+
+#### 8.6 Catch-Up In One Transaction (R.7)
+
+One private execution verifies several consecutive periods, so a stalled instance resumes in
+one transaction with no gap in the handoff chain. Delivered and measured in M1.
+
+#### 8.7 Recorded Statements And Batching (Soft #1, #2, #4)
+
+- **Recorded statements.** `Record` runs the same `evaluate` as `Attest` and writes the statement
+  to a write-once account derived from the instance and the statement ID. One verification
+  core, so one audit surface. A reader trusts the program, not whoever paid for the write, but
+  acts on a result from an earlier transaction, which the direct path never asks; the docs say
+  so. Recorded statements are public by design.
+- **Batching.** `Attest` and `Record` take a list of queries over one record: the record is read
+  once, and each query adds only its own proof and predicates. A private batch is one proof and
+  one `CheckRecord` for all of them.
+- **Compound statements (soft #4):** AND over several proofs under one header in one statement.
+
+All three are delivered in M2, with their costs measured.
+
+### 9. Operator Daemon And Operator Incentive (U.3, R.4, R.5, R.9, R.10, Soft #5)
+
+The daemon is a Logos module plus a Logos Core headless CLI. It follows Ethereum through the
+Logos Ethereum core module and tracks the instance from LEZ events (LP-0012).
+
+- **Re-check before submit (R.9).** A losing racer pays its whole reserve (E1), so the daemon
+  re-reads the instance immediately before sending and keeps its reserve tight.
+- **Deferral (R.10).** A per-instance randomized delay spreads cost across operators; its effect
+  on latency is documented.
+- **Restart (R.4, R.5).** The daemon resumes from the instance on LEZ, never re-verifies from the
+  checkpoint, and never repeats applied work.
+- **Requirements (S.7).** No standing on Ethereum and no registration: only a consensus
+  endpoint and LEZ gas. The operator proves on its own CPU; the measured minimum is section 8.4.
+
+**Decision D8: a staleness bounty (soft #5).** Each instance has a bounty pool, a PDA of the
+program seeded by the instance ID, funded by anyone with an ordinary transfer. A successful
+`Advance` pays the recipient it names `min(pool, rate × Δslots, cap)` through
+`custody_transfer`, where `Δslots` is how far the new finalized header is past the previous one,
+proven by the update itself. `rate` and `cap` are immutable instance config. The payout grows
+with staleness, so operators with different costs act at different moments instead of racing,
+and tiny frequent updates earn tiny payouts. There's no registration (F.11); whoever lands the
+`Advance` is paid. An unfunded pool pays nothing, and liveness never depends on it.
+
+### 10. Reuse (R.6)
+
+TODO (team): name the base the build uses.
+
+Every figure in this proposal ran on `sextant-core`, the light-client verifier from the Sextant
+prototype ([edenbd1/lez-sextant](https://github.com/edenbd1/lez-sextant), MIT OR Apache-2.0),
+vendored unmodified, and the prototype's program design follows Sextant's LEZ v0.3 program. The delivered module's
+light-client core is chosen in M0 against the audited alternatives, on fixed criteria:
 
 | Candidate | Audited | Fit with LEZ |
 |---|---|---|
-| `r0vm-helios` | yes, by zkSecurity | Same zkVM (RISC Zero). Built for EVM destination chains with Solidity contracts, so the LEZ actor, records and attestation are ours to write |
-| Helios `consensus-core` | upstream of the audited forks | Plain Rust; needs adapting to run inside a LEZ actor |
-| `sextant-core` | no | Already runs as a LEZ v0.4 actor; every number here was measured on it |
+| `r0vm-helios` | yes, by zkSecurity | Same zkVM (RISC Zero). Targets EVM destinations, so the LEZ actor, records and attestation are ours |
+| Helios `consensus-core` | upstream of the audited forks | Plain Rust; adapted to run inside a LEZ actor |
+| `sextant-core` | no | Already runs as a LEZ v0.4 actor |
 
-**Primitives:** BLS12-381 through RISC Zero's accelerated `blst` fork and `bls12_381`, SHA-256
-and Keccak, SSZ, and Merkle-Patricia proof code.
+Criteria: Electra, Fulu and Gloas coverage; whether the audit covers the code paths the program
+runs; its cycles under LEZ's metering, re-measured with the same runs; and the work to fit the
+actor model. Primitives: BLS12-381 through RISC Zero's accelerated `blst` and `bls12_381`,
+SHA-256, Keccak, SSZ and Merkle-Patricia proofs. Reused audited code on audited paths leaves
+the audit (M5) with the LEZ-specific code: the actor and its trust boundary, records,
+statements, predicates and inclusion proofs. Code outside an existing audit joins that scope.
 
-**Evaluation (M0, budgeted):**
+### 11. Security Model (S.6, VS.1–VS.6)
 
-- For each candidate: Electra, Fulu and Gloas coverage (gindices, the Gloas execution
-  commitment), and whether the audit covers the code paths the program runs.
-- Its cycles under LEZ's metering: the B3 and B13 runs repeated on it.
-- The work to fit it to the actor model.
-- Recorded in the decision log: what we reuse, what we rewrite, and what that leaves for the
-  audit (S.8).
+- **Fabricated chain (VS.1),** tested explicitly. A fabricated execution state root is committed
+  in the finalized header, that header in the attested state, and the attested header is signed
+  by all 512 keys of a committee we generated. Refused: `CommitteeMismatch`. The control: against
+  a store that trusted that committee, the same update verifies, so the refusal comes from the
+  committee chain back to the checkpoint. A fabricated checkpoint header: `CheckpointMismatch`.
+- **Every VS.2 rejection, tested:** a committee never handed off (`HandoffNotVerified`), a
+  forged next committee (`BadCommitteeBranch`), 341 of 512 signers (`BelowParticipation`), a
+  header not finalized (`NotFinalized`), a tampered state or receipts root (`BadExecutionBranch`;
+  `BadInclusion` against a record), a proof replayed to another chain (`ChainMismatch`; an update
+  under another chain's domain, `BadSignature`), and a predicate over state the proof doesn't
+  cover (`Malformed`; another slot, `BadInclusion`). 13 native tests on recorded mainnet vectors,
+  each next to an honest control that passes. The attestation cases were also refused on the
+  node. In M1 the whole suite runs through the deployed program.
+- **VS.6:** an update is accepted on proof validity alone. The submitter's account is never
+  checked; E1 settled updates from blinded senders.
 
-**Audit-surface consequence.** Code reused from an audited implementation, on the paths that
-audit covered, leaves the audit (M5) with the LEZ-specific code: the actor and its trust
-boundary, records, statements and predicates, and the inclusion proofs. Code not covered by an
-existing audit, including all of `sextant-core` if it stays, joins that scope.
+#### 11.1 Failure Modes (VS.4)
 
-#### 12. Dependency check against the live runtime
+A consumer bounds its exposure with four defences, all enforced in its own transaction: a signer
+threshold above the protocol's 342, read from the record's signer count; the two-committee rule,
+acting only on a header the next committee has also built on; a value cap per header or period;
+and a freeze authority of its own, as RFP-022 specifies for the bridge, which can't censor other
+consumers or touch tracked state.
 
-| Dependency | Status | Our handling |
+A compromised committee can get a never-finalized header recorded and make false statements
+verifiable from that record on. It can't alter existing records or consumed statements, or move
+the checkpoint or config. Recovery is a fresh instance from a checkpoint before the attack. The
+Recommended Consumer Pattern (S.4) also pins this module's program ID and instance in the
+consumer, never in mutable state (VS.3).
+
+**Off-chain participants (F.12)**
+
+| Participant | Does | Affects | If it declines or misbehaves |
+|---|---|---|---|
+| Checkpoint supplier (`Init`) | Chooses the checkpoint and config | **Safety**, once | Consumers verify the checkpoint through the core module's API (F.9) before binding; a bad instance is replaced, never fixed in place |
+| Beacon API source | Serves updates and committee keys | Liveness | Everything it serves is verified; any beacon node serves the same data |
+| Operator | Proves and submits updates | Liveness | Anyone can operate, with no registration (F.11); proving is delegable (section 8.5) |
+| Execution RPC | Serves `eth_getProof` and receipts | Liveness | Every proof is checked against a verified record |
+| Consumer's prover (private) | Proves the consumer's own transaction | Liveness, that consumer only | No third party sees the query |
+| Relayer (optional) | Submits a consumer's attestation | Liveness | The consumer submits directly |
+| Sync committee | Signs headers | **Safety**: honest supermajority | Stake at risk in section 2; consumer defences in 11.1 |
+| Restaker (Caisson Stake, D1) | Locks stake behind a record after checking it against Ethereum's finality | **Economic safety** for consumers that require backing | Backing a false header forfeits its stake in full; declining leaves those consumers waiting for other backers |
+| Challenger (Caisson Stake, D1) | Proves a backed record false within its challenge window | **Safety** for consumers that require backing: at least one must act | Anyone can challenge, and a challenge is a proof, not an accusation, so it can't be false |
+
+Only the checkpoint supplier and the sync committee affect safety, and every liveness role can
+be filled by anyone, so no party alone or as a class can stop an attestation from eventually
+being produced. With Caisson Stake, consumers that act on backing additionally rely on at
+least one honest challenger acting within each record's window, which anyone can be.
+
+### 12. Platform Dependencies, Checked Against The Live Runtime
+
+| Dependency | Status | Handling |
 |---|---|---|
-| LEZ testnet 0.4 (S.1) | `v0.4.0-rc1` tagged 29 Oct. The public testnet 0.4 is not live as of 2 Nov | Build and measure on the rc now. Run end-to-end tests on a local v0.4 devnet with a standalone sequencer (S.2). Deploy to testnet 0.4 in M4 once it launches. Re-measure on the final 0.4 |
-| SPEL IDL (U.4) | SPEL `v0.7.0-rc.3` supports neither LEZ v0.3 nor v0.4 (spel#291) | Hand-written SPEL-format IDL, with a drift check in CI |
-| Logos Ethereum core module | No light-client objects or raw `eth_getProof` nodes | Chirag Mahaveer Parmar, who worked on the Nimbus verified proxy, extends it upstream (U.1, F.9) |
-| Standalone sequencer + Bedrock (S.2) | No published Bedrock release matches v0.4's pin. Built from source at the pinned commit, it runs: our local devnet (one Bedrock node, sequencer, indexer) ran deploy, Init, updates and attestations on 3–6 Nov | e2e on this devnet. Known issue: the sequencer's Bedrock funding key drains after about 1,350 blocks and must be topped up |
+| LEZ testnet 0.4 (S.1) | `v0.4.0-rc1` tagged 29 Oct; the public testnet isn't live yet | Built and measured on the rc and a local v0.4 devnet (S.2); deployed to testnet 0.4 in M4; every benchmark is scripted and re-run on the final 0.4 |
+| Standalone sequencer and Bedrock (S.2) | No published Bedrock release matches v0.4's pin | Built from source at the pinned commit; deploy, Init, updates and attestations ran on this devnet 3–6 Nov |
+| SPEL IDL (U.4) | SPEL `v0.7.0-rc.3` supports neither LEZ v0.3 nor v0.4 (spel#291) | SPEL-format IDL written by hand, with a drift check in CI |
+| Logos Ethereum core module | Doesn't expose light-client objects or raw `eth_getProof` nodes | Extended upstream by Chirag Mahaveer Parmar, who worked on the Nimbus verified proxy it wraps (U.1, F.9) |
+| LP-0012 events | Delivered | The daemon and indexers follow handoffs and records from events |
 
-#### Traceability matrix
+### 13. Performance Summary (P.1–P.9)
 
-Every hard requirement maps to a design element and a test or artifact.
+| Req | Result |
+|---|---|
+| P.1 | Attestation fits one transaction: 52–190k cycles, 397k reaching 1,000 blocks back |
+| P.2 | Per action: cycles, gas, proof time and proof size above, reproducible from the scripted runs |
+| P.3 | Tracking about 11.3M a period at the floor base fee, two updates a period |
+| P.4 | Updates: 36–38 min, 8.6–9.3 GB at the default segment size; 3.9 GB at 2^18. Private attestation: 12.5–14.6 min, 7.5–9.0 GB; declared minimum 16 GB |
+| P.5 | A block before the latest record: no update wait. A newer event, on demand: about 13 min finality, up to 6.4 min for the update to appear, 36–38 min proving; about 49–57 min on the reference laptop, 30–36 min on an M3 Max |
+| P.6 | Operator: one CPU prover, 8.6–9.3 GB at the default segment size, two proofs a period |
+| P.7 | 118 KB a year, 591 KB over five years; the instance is constant |
+| P.8 | The update check is 12.8M cycles: pairing 7.84M (61%), hash to G2 1.18M (9%), the two committee roots 1.09M each, decoding 1.31M. A pairing precompile would remove most of it, but it would be reachable only from public transactions, and Caisson proves the check privately, so it needs none |
+| P.9 | Every action reads one record account by its derived address |
+
+### 14. Traceability Matrix
 
 | Req | Design | Evidence |
 |---|---|---|
-| F.1 | Module checks the aggregate in its proven actor | Proof test on mainnet vectors (E1b) |
-| F.2 | Finality branch plus participation | Reject-unfinalized test |
-| F.3 | Account, storage and receipt-log MPT, roots bound to the record | Inclusion tests; caller-root-ignored test. Node: storage slot accepted, tampered proof refused on both paths ([node runs](https://github.com/vineetpant/lez-hello-world/blob/eb686e9a0b2a8cef05f0017aa9eb694ad5212346/rfp-021/results.md#node-runs-eth_lc-on-a-lez-v04-devnet-real-proofs)) |
-| F.4 | Predicate language (section 7) | Consumer-defined predicate test, no module change |
-| F.5 | `chain_id` in instance and statement | Same contract on mainnet and Sepolia, cross-rejected |
-| F.6 | ID classes (section 7) | Equal-state and distinct-state tests |
-| F.7 | Attest inside the consumer's transaction | Reference consumers |
-| F.8 | Private attest; one `CheckRecord` crossing from a blinded alias; refunds to the blinded alias | Node: every published field listed, and no private account, payer or query detail in the transaction. Full public-state diff (M2) |
-| F.9 | Write-once instance; checkpoint API | Immutability test; core-module API |
-| F.10 | Fresh instance on staleness | Migration doc plus stale-instance test |
-| F.11 | Any account advances (both paths) | Fresh-account test |
-| F.12 | Off-chain participants, safety vs liveness (section 10b) | Table in 10b; trust document |
-| F.13 | No rewrite instruction | Interface review plus test |
-| F.14, F.15 | `H(checkpoint ‖ config)` instances | Mainnet, Sepolia and Hoodi coexisting |
+| F.1 | Program checks the aggregate in its proven actor (D2) | E1 real proof on a mainnet update; node runs |
+| F.2 | Finality branch plus participation | `NotFinalized`, `BelowParticipation` tests |
+| F.3 | Account, storage and receipt-log MPT bound to the record | Node: slot accepted, tampered proof refused; inclusion tests |
+| F.4 | Consumer-written claim (section 4.5) | Consumer-defined predicate test, no module change |
+| F.5 | `chain_id` in instance, record and statement | `ChainMismatch` test; mainnet and Sepolia cross-rejected (M2) |
+| F.6 | ID classes (D5) | Equal-state and distinct-state tests |
+| F.7 | Attest inside the consumer's transaction | Node runs; reference consumers (M2) |
+| F.8 | One `CheckRecord` from a blinded alias | Node: transaction searched, nothing linkable published; full state diff (M2) |
+| F.9 | Write-once instance configuration (D3); checkpoint API | Immutability test; core-module API (M3) |
+| F.10 | Fresh instance on staleness | `CheckpointStale`; migration doc |
+| F.11 | Any account advances | Blinded senders settled (E1); fresh-account test |
+| F.12 | Participant table (section 11) | Trust document |
+| F.13 | No rewrite instruction; immutable deployment | Interface review; loader refuses `UpdateHeader` |
+| F.14, F.15 | `H(checkpoint ‖ config)` instances | Mainnet, Sepolia and Hoodi coexisting (M4) |
 | U.1–U.3 | Logos modules, CLI, daemon | Module catalog, CLI docs |
 | U.4 | Hand-written SPEL IDL | Drift check in CI |
-| U.5 | Typed errors (section 7) | Error table. Node: the dry run returns the program's code and stops before submitting |
-| U.6 | ERC-20 and native-ETH consumers | e2e tests |
-| R.1, R.2 | Deterministic, read-only attest; dry run before submit | Repeat-verdict test. Node: a refused private attest submits nothing; a refused public one is charged its gas limit, so the CLI dry-runs and sets a tight limit |
-| R.3 | Immutable record accounts | Node: records written once and read back; post-rotation validity test |
+| U.5 | Typed errors | Node: dry run returns the program's code |
+| U.6 | ERC-20 and native-ETH vault consumers | e2e tests |
+| R.1, R.2 | Deterministic attest; dry run | Repeat-verdict test; refused private attest submits nothing |
+| R.3 | Immutable records (D4) | Node: written once, read back |
 | R.4, R.5 | Daemon resumes from LEZ state | Kill and restart tests |
-| R.6 | Reuse assessment (section 11) | Document |
-| R.7 | Stalled instance resumes; catch-up | Stall test |
-| R.8 | Digest-checked `Advance` | Racing test (E1c) |
-| R.9, R.10 | Re-check plus deferral | Multi-operator test |
+| R.6 | Reuse (section 10) | M0 decision log entry |
+| R.7 | Catch-up (8.6) | Stall test |
+| R.8 | `Advance` refuses an update proven on another store | Racing test (E1) |
+| R.9, R.10 | Re-check and deferral | Multi-operator test |
 | R.11 | Immutable records, no shared writes | Same-block private attest test |
 | R.12 | CI | Green default branch |
-| P.1 | Attest under the per-transaction budget | Cycle report |
-| P.2 | Per action: cycles, gas, proof time, proof size | bench-plan.md |
-| P.3 | Amortised tracking cost at the recommended cadence | Two updates per period: results.md B12a |
-| P.4 | Laptop and minimum-spec proving | Updates: B1, B2. Private attestation on the node: 7.5–9.0 GB; declared minimum 16 GB |
-| P.5 | Latency breakdown | results.md B12b: no update wait for a block before the latest record; 49–57 min on demand on the reference laptop |
-| P.6 | Daemon and prover resources | Report |
-| P.7 | Storage growth over 1 and 5 years | results.md B12c: 118 KB a year, 591 KB over 5 |
-| P.8 | In-program vs precompile delta | Report |
-| P.9 | No cost scaling with stored state | Node: every action reads one record account by its derived address |
-| S.1, S.2 | Testnet 0.4; e2e on a standalone sequencer | Deployment, CI |
-| S.3–S.5 | Integration, consumer-pattern and operator docs | Docs |
-| S.6 | Trust assumptions document | Doc (section 10) |
-| S.7 | Operator role document | Doc |
+| P.1–P.9 | Section 13 | Scripted benchmarks |
+| S.1, S.2 | Testnet 0.4; standalone-sequencer e2e | Deployment; CI |
+| S.3–S.7 | Integration, consumer-pattern, operator and trust docs | Docs in repo |
 | S.8 | Audit | M5 |
-| S.9, S.10 | Module catalog plus release action | Release |
-| S.11 | Decision log | `docs/DECISIONS.md` |
-| VS.1–VS.6 | Adversarial suite (section 10) | VS.1, VS.2: `tests/adversarial.rs`, 13 native tests, passing; attestation cases also refused on the node |
-| Soft #1 | `Record` on the same `evaluate` core (section 6b) | Shared-core test; recorded-statement doc. To build, M2 |
-| Soft #2 | A list of queries per record (section 6b) | Per-query cost and private proving time against batch size. To measure, M2 |
-| Soft #3 | EIP-2935 history, parent-hash fallback (section 8) | Node: 1,000 back and 3 back, accepted, real proofs; `tests/history.rs`, 6 tests |
-| Soft #4 | Compound statements over one header (section 7) | Prototype: AND of predicates over one proof; across proofs, M2 |
-| Soft #5 | Staleness bounty pool (section 9b) | Design; issue #18 |
+| S.9, S.10 | Own module catalog via the release action | Release |
+| S.11 | Decision log D1–D8, kept current | `docs/DECISIONS.md` |
+| VS.1, VS.2 | Adversarial suite | 13 native tests; attestation cases refused on the node |
+| VS.3–VS.6 | Sections 2, 4, 11 | Immutability; consumer pattern; trust document |
+| Restaking (D1) | Caisson Stake, isolated, reading records through a read-only query | Tests: a forged record's backing forfeited, an honest record's released after its window, Caisson's updates and attestations work without Caisson Stake deployed (M3) |
+| Soft #1, #2, #4 | Section 8.7 | M2 |
+| Soft #3 | Section 8.1 | Node runs; 6 native tests |
+| Soft #5 | D8 | M3 |
 
-#### Design decision log (seed entries)
+### 15. Risks
 
-- **D1: Proven update as the operating mode, public split as the fallback.**
-  - Why: 1 transaction, about 30× less exec gas (measured, B3/B6), no job state.
-  - Cost: prover hardware, plus about 16 min CPU per update on an M3 Max (E1b) and 36–38 min on
-    the reference laptop on a running node.
-- **D2: Verifier compiled into the program, not an external zk light-client proof.**
-  - A LEZ program cannot verify an outside receipt inside its own proof.
-  - Public STARK or Groth16 verification is pairing-heavy, and the RFP dropped a second proof
-    layer for the same reason.
-- **D3: Attest trusts header records and never re-verifies signatures.**
-- **D4: Private attest on a private actor of the program; its only boundary crossing is one
-  `CheckRecord` call from a blinded alias.** A state read would publish the same and isn't
-  shown on v0.4.
-- **D5: Instance ID = `H(checkpoint ‖ config)`.**
-- **D6: Statement-ID nullifier-safety classes.**
-- **D7: Native ETH via a vault log, not the transaction trie.**
-- **D8: Header records in write-once accounts derived from the instance and the slot.**
-  - Why: an old statement stays valid (R.3), and each action reads one record (P.9).
-  - Cost: about 146k per update that writes a record; attestations got about 46k cheaper
-    (measured on the node, 6 Nov).
-  - Rejected: a bounded ring in the instance, which drops old records.
-- **D9: History through EIP-2935, with a parent-hash chain as the fallback.**
-  - Why: the instance needs two updates per period instead of one every few hours.
-  - Cost, measured: nothing extra on the private path; 1.47M more on the public path for a
-    block 1,000 back, 0.69M for one 3 back.
-  - Rejected: our own history on LEZ, which needs a record for every reachable block, so more
-    updates. Beacon `block_roots`, because the standard Beacon API doesn't serve those proofs.
-- **D10: Two updates per period, plus on demand.**
-  - Why: liveness (the handoff), coverage (records less than 8,191 blocks apart), and cost.
-  - Cost: an event newer than the latest record waits up to 13.7 h, or for an on-demand update.
-
-#### Risks and anticipated challenges
-
-- **Provisional private fees.** `PRIVATE_VERIFY_GAS` is marked `FIXME: Provisional`. If private
-  work became metered, D1's advantage would shrink. Path B keeps the system working.
-- **Latency, for an event newer than the latest record.** (An older one, within 8,191 blocks,
-  needs no update.) On the reference laptop, from the event to a header recorded on LEZ takes
-  about 49–57 min: about 13 min of finality, up to 6.4 min for the update to appear, 36–38 min
-  of proving, one block. A private attestation adds 13–15 min of proving on top. GPU proving
-  (B10) is the main lever; finality time is not ours to change.
-- **Operator hardware.** Per update: 36–38 min and 8.6–9.3 GB peak on the reference laptop (M3
-  Pro, 18 GB, CPU) at the default segment size, measured on the node; 16.6 min and 14.1 GB on an
-  M3 Max (E1b). Smaller segments trade time for memory: 5.3 GB in 34.6 min at 2^19, 3.9 GB in
-  48 min at 2^18 (B2). GPU is to measure (B10).
-- **Operators without proving hardware.** A prover can't forge an update; it can only fail to
-  produce one. So the heavy part can be delegated. The update has two proofs: the program's
-  proof, about 760 s of the 995 s in E1b, takes only public update material as input, while the
-  privacy circuit's proof, about 233 s, needs the submitter's private keys. The first can go to a
-  remote prover while the second stays local. LEZ proves both through one prover today, so this
-  needs a daemon-side path or a small LEZ change. Planned in M3 as an option, not a dependency:
-  the public split path already needs no prover at all.
-- **Refused public attestations are expensive.** v0.4 charges a reverted public transaction its
-  whole gas limit, 16,059,024 against 1,820,152 accepted. The CLI dry-runs before submitting.
-- **Testnet 0.4 timing.** The public testnet isn't live yet. Everything up to M4 runs on the rc
-  and a local devnet. If the launch slips past M4, the deployment moves with it and the rest of
-  M4 is delivered on the devnet.
-- **Release-candidate drift.** Every node number here is from `v0.4.0-rc1`. The final 0.4 may
-  change APIs or the provisional fee constants. Every benchmark is scripted, so re-measuring is
-  a re-run, budgeted in M4.
-- **Liveness.** A missed handoff stops an instance. Mitigations: multiple operators, alerting,
-  on-demand submission, catch-up.
-- **A missed mid-period update.** Records can then end up more than 8,191 blocks apart. A
-  block in the gap is still reachable through the parent-hash fallback or an on-demand update,
-  so it costs latency, not safety.
+- **Private fee constants are provisional.** LEZ marks `PRIVATE_VERIFY_GAS` `FIXME: Provisional`.
+  If private work were metered, D2's advantage would shrink. Every benchmark is scripted, so the
+  cost is re-measured on the final 0.4 in M4.
+- **Latency for an event newer than the latest record:** about 49–57 min end to end on the
+  reference laptop, most of it proving. GPU or delegated proving (8.5) is the lever; finality
+  time is the protocol's.
+- **Operator hardware:** 36–38 min and 8.6–9.3 GB per update on the reference laptop, 3.9 GB at
+  a smaller segment size.
+- **Testnet 0.4 timing:** not live yet. Everything through M3 runs on the rc and a local devnet;
+  if the launch slips past M4, the deployment moves with it.
+- **The sync committee may be removed.** EIP-8390 (draft, no fork named) would replace it with
+  ZK proofs of FFG finality over the full validator set. Sync-committee light clients, Caisson
+  included, would stop advancing after that fork. Caisson would move to the new anchor as a new
+  program version with new instances, the migration path of section 4.1; records and statements
+  already made stay valid, and consumers rebind.
+- **Liveness:** a missed handoff stops an instance until someone submits it. Mitigations: several
+  operators, alerting, on-demand submission, catch-up (8.6). A missed mid-period update costs
+  latency, never safety: blocks in the gap stay reachable through the parent-hash chain.
 
 ## Milestones, Payout and Timeline
 
-TODO (team): a USD payout and a duration for each milestone. The build totals 8–12 weeks plus the audit.
+TODO (team): a USD payout and a duration for each milestone. The build totals 8–12 weeks plus
+the audit.
 
 | # | Milestone | Weeks | Payout (USD) | Deliverables |
 |---|---|---|---|---|
-| M0 | Cost baseline | 1 | TODO | Public and proven update numbers, laptop numbers and a GPU number on `v0.4`, reviewed with Logos before the build |
-| M1 | Verifier core and updates | 3 | TODO | Light client (Gloas-aware), proven path, public path, Init, instance immutability, VS.1–VS.2 tests, decision log |
-| M2 | Attestation | 2 | TODO | Public and private attest, the full predicate interface and statement IDs (section 7), recorded statements and batching (section 6b), ERC-20 and native-ETH reference consumers, F.8 boundary evidence, P.4 laptop numbers |
-| M3 | Ethereum side and operations | 2–3 | TODO | Core module extensions, F.9 checkpoint API, daemon (Logos module plus headless CLI), CLI with dry run, history proofs |
-| M4 | Testnet and release | 2 | TODO | LEZ testnet 0.4 deployment against a public Ethereum testnet (once launched), all benchmarks re-run on the final 0.4, e2e CI on a standalone sequencer, docs, trust-assumptions document, module catalog release |
-| M5 | Audit | — | TODO | Third-party audit of consensus and inclusion logic, plus fixes. Allowance TBD. |
+| M0 | Cost baseline | 1 | TODO | Update and attestation numbers on `v0.4`, laptop and GPU, the reuse decision (section 10), reviewed with Logos before the build |
+| M1 | Verifier core and updates | 3 | TODO | Gloas-aware light client in the proven update, Init, immutable instances, records with signer counts, catch-up, VS.1–VS.2 through the deployed program, decision log |
+| M2 | Attestation | 2 | TODO | Public and private attest, the full predicate interface and statement IDs, recorded statements, batching and compound statements, ERC-20 and native-ETH reference consumers, F.8 state-diff evidence, P.4 numbers |
+| M3 | Ethereum side and operations | 2–3 | TODO | Core module extensions, F.9 checkpoint API, daemon (Logos module plus headless CLI) with re-check, deferral and delegated proving, CLI with dry run, staleness bounty, Caisson Stake and the public record query (D1) |
+| M4 | Testnet and release | 2 | TODO | Testnet 0.4 deployment against a public Ethereum testnet, benchmarks re-run on the final 0.4, e2e CI on a standalone sequencer, docs, trust-assumptions document, module catalog release |
+| M5 | Audit | — | TODO | Third-party audit of the consensus and inclusion logic, fixes, published report. Caisson Stake is a separate image and is scoped as its own audit line |
 
 ## Total Requested Budget (USD)
 
@@ -805,30 +892,41 @@ TODO (team): the sum of the milestone payouts above.
 
 ## Relevant Experience
 
-All three partners worked on Incubed, a light client that verifies Ethereum responses for
-devices without a full node. That work is the same problem this RFP poses: deciding what to
-accept from an untrusted source using only proofs against a trusted root.
-
-- **Chirag Mahaveer Parmar** worked on the Nimbus verified proxy, which is what the Logos
-  Ethereum core module wraps. The upstream extensions this proposal needs from that module
-  (light-client objects, raw `eth_getProof` nodes, the F.9 checkpoint API) are changes to code
-  he knows.
-- **Shoaib Ahmed** worked on Cosmos IBC, where each chain verifies the other's consensus with
-  an on-chain light client: the model this module follows on LEZ. He ran the research and
-  experiment E1 behind this proposal ([`logos-explorations`](https://github.com/hu55a1n1/logos-explorations/tree/d035841b1efe484db91956eee2a9f47b305dcba3/rfp-021/e1)), which showed a real
-  mainnet sync-committee update proven as one private LEZ v0.4 transaction.
-- **Vineet Pant** worked on decentralized and self-sovereign identity: proving a claim to a
-  verifier without revealing more than the claim, which is the F.8 problem the private
-  attestation path solves. He built the `eth_lc` prototype and ran its measurements on a LEZ
-  v0.4 devnet ([`lez-hello-world`](https://github.com/vineetpant/lez-hello-world/tree/eb686e9a0b2a8cef05f0017aa9eb694ad5212346)).
-
-TODO (team): links for each item above (GitHub profiles, the Incubed and Nimbus verified proxy
-work, Cosmos IBC, identity work).
+- **Chirag Mahaveer Parmar** ([chirag-parmar](https://github.com/chirag-parmar)) builds the
+  Nimbus verified proxy in `nimbus-eth1`, which the Logos Ethereum core module wraps: 68 merged
+  pull requests, among them its REST-based light client, light-client scoring across multiple
+  endpoints, EIP-2935 anchor jumps and `BLOCKHASH`, Gloas updates, and its C, Go and WASM
+  bindings. He fixed `eth_getProof` in `nim-web3` and optimised RLP in `nim-eth`, and was an
+  Ethereum Protocol Fellow (cohort five). The upstream extensions this proposal needs from the
+  core module (light-client objects, raw `eth_getProof` nodes, the F.9 checkpoint API) are
+  changes to code he maintains.
+- **Shoaib Ahmed** ([hu55a1n1](https://github.com/hu55a1n1)) worked on Cosmos IBC at Informal
+  Systems, where each chain verifies the other's consensus with an on-chain light client: the
+  model Caisson follows on LEZ. In `ibc-rs` (then inside `hermes`, 59 merged pull requests) he
+  implemented the light-client extraction (ADR 011) that separated light clients from the IBC core, and
+  he contributed to `basecoin-rs`. He was lead developer of Quartz, a TEE framework whose
+  enclaves verify the chain through a light client, and of Cycles, with arkworks settlement
+  circuits and nullifier derivation; he now works on Shielded Labs' Zeronym. He did the research and E1 behind this design
+  ([`logos-explorations`](https://github.com/hu55a1n1/logos-explorations/tree/d035841b1efe484db91956eee2a9f47b305dcba3/rfp-021/e1)),
+  which proved a real mainnet sync-committee update as one private LEZ v0.4 transaction.
+- **Vineet Pant** ([vineetpant](https://github.com/vineetpant)) worked on decentralized and
+  self-sovereign identity at evan.network (`vade-evan`, `didcomm-rs`): verifiable credentials and
+  presentations that reveal only chosen attributes, the problem F.8 poses. As an Ethereum
+  Protocol Fellow (cohort six) he built dVRPC, a decentralized verified RPC node for Ethereum with
+  an integrated light client, and he has contributed to Reth and Ream. He built the `eth_lc`
+  prototype and ran its measurements on a LEZ v0.4 devnet
+  ([`lez-hello-world`](https://github.com/vineetpant/lez-hello-world/tree/eb686e9a0b2a8cef05f0017aa9eb694ad5212346)).
+- **Manas Nagaraj** ([hopinheimer](https://github.com/hopinheimer)) is a developer at Sigma Prime
+  on Lighthouse, the Rust Ethereum consensus client, and a former Ethereum Protocol Fellow. His
+  merged Lighthouse work includes Gloas support (payload-attestation gossip verification,
+  backfill, builder onboarding) and fork-choice updates, and he has contributed gossipsub 1.2 to
+  rust-libp2p. Caisson verifies the consensus objects he works on in a production client: beacon
+  headers, sync-committee branches, SSZ roots and the fork schedule, Gloas included.
 
 ## Post-Delivery Plan
 
-TODO: owner. Expect a servicing ask: operate an update daemon for a defined period, inside the
-budget.
+TODO (team): owner, and the period for which Congruence Labs operates an update daemon for the
+reference instance, inside the budget.
 
 ## Permissions and Consent
 
