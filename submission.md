@@ -525,14 +525,12 @@ recorded mainnet (block 26376237), with one condition each
 ([`caisson/experiments/mpt-zkvm`](https://github.com/congruence/caisson/tree/main/experiments/mpt-zkvm)):
 executed for the public path's cycles, and proven to a succinct receipt for the private path.
 
-| Check | Public: cycles | Of which, the check | Input | Proving | Peak memory |
-|---|---:|---:|---:|---:|---:|
-| Account | 153,931 | 135,599 | 4,028 B | 46.0 s | 5.2 GB |
-| Storage slot with its account | 270,062 | 244,617 | 7,104 B | 59.4 s | 5.9 GB |
-| Receipt log | 61,074 | 49,801 | 1,743 B | 39.6 s | 4.8 GB |
-| Each extra condition | +507 to +589 | — | +33 B | — | — |
-
-The rest of each public figure is reading the input. Each receipt is 223,362 bytes.
+| Check | Public: cycles | Input | Proving | Peak memory |
+|---|---:|---:|---:|---:|
+| Account | 153,931 | 4,028 B | 46.0 s | 5.2 GB |
+| Storage slot with its account | 270,062 | 7,104 B | 59.4 s | 5.9 GB |
+| Receipt log | 61,074 | 1,743 B | 39.6 s | 4.8 GB |
+| Each extra condition | +507 to +589 | +33 B | — | — |
 
 *Ref. Apple M4 Pro, 14 cores, 48 GB, proving on CPU with `r0vm` 3.0.5.*
 
