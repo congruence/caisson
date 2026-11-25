@@ -186,12 +186,14 @@ The following points explain the optimization concisely.
   - How: it is replaced by the residue check of [eprint 2024/640](https://eprint.iacr.org/2024/640),
     `f·s = c^λ`, with `s ∈ Fp6`, `c ≠ 0` and canonical coordinates.
 
+All rows below were measured on an Apple M4 Max, so they differ from the E1 run on the M3 Max above.
+
 | Item | 0.1 | 0.2 | 0.3 | Class |
 |---|---:|---:|---:|---|
-| Real proof, step 1 | 1,107 s | **774 s** | ⟨measure⟩ (est. about 620 s) | measured / estimated |
-| Peak memory | 13.1 GB | **7.4 GB** | ⟨measure⟩ | measured |
+| Real proof, step 1 | 1,247 s | 774 s | **696 s** | measured |
+| Peak memory | 8.1 GB | 7.4 GB | **6.6 GB** | measured |
 | Update input, kept off chain | 52 KB | 3.1–3.5 KB | 4.0–4.4 KB | measured |
-| Direct execution (what a sequencer runs on the public path) | 238–243 ms | 181–186 ms | 131–134 ms | measured |
+| Direct execution (what a sequencer runs on the public path) | 238–243 ms | 181–186 ms | 134–142 ms | measured |
 
 **Next (estimated):**
 
@@ -1020,9 +1022,9 @@ Every requirement, how Caisson meets it, and the evidence. "Node" means a run on
 | P.1 | An attestation fits one transaction: 61,074 cycles for a receipt log, 153,931 for an account, 270,062 for a storage slot with its account, plus 507–589 per extra condition (section 5). An older block adds a 2.4 KB canonicality proof (section 7.1) |
 | P.2 | Cycles, gas, proving time, memory and input size for the update (section 2) and each attestation (section 5), reproducible from the published runs |
 | P.3 | Tracking at two updates a period: 859,446 exec gas and 448,126 storage gas, from E1's 429,723 and 224,063 per update |
-| P.4 | Update: 774 s and 7.4 GB peak on an M3 Max CPU (section 2.2); 30.2 s on an RTX 4090 (E1). Private attestation: 39.6–59.4 s and 4.8–5.9 GB on an M4 Pro CPU; declared minimum 16 GB (section 5) |
-| P.5 | A block at or before the latest record: a canonicality proof, no update (section 7.1). A newer event: about 13 min to finality, up to 6.4 min for a light-client update to be served, then its proof: 774 s on an M3 Max CPU (0.2), 30.2 s on an RTX 4090 (0.1, E1) |
-| P.6 | Operator: one prover, 7.4 GB peak per update on CPU (section 2.2), or a 24 GB GPU; two updates a period |
+| P.4 | Update: 696 s and 6.6 GB peak on an M4 Max CPU (0.3, section 2.2); 1,107 s and 13.1 GB on an M3 Max CPU (0.1, E1); 30.2 s on an RTX 4090 (E1). Private attestation: 39.6–59.4 s and 4.8–5.9 GB on an M4 Pro CPU; declared minimum 16 GB (section 5) |
+| P.5 | A block at or before the latest record: a canonicality proof, no update (section 7.1). A newer event: about 13 min to finality, up to 6.4 min for a light-client update to be served, then its proof: 696 s on an M4 Max CPU (0.3), 30.2 s on an RTX 4090 (0.1, E1) |
+| P.6 | Operator: one prover, 6.6 GB peak per update on an M4 Max CPU (0.3, section 2.2), or a 24 GB GPU; two updates a period |
 | P.7 | Records grow about 213 KB a year and 1.07 MB over five years, at two updates a period: each update writes a 270 B header, each losing racer a 92 B race receipt, each period an 80 B committee and a 44 B update counter (Borsh data, before LEZ's per-account overhead). The 153 B consensus state is one account, rewritten. History records, if sent for every header, add 98 B each, 63 KB a year. The instance doesn't grow |
 | P.8 | The update check is 6.15M cycles, from 14.06M (section 2.2). In the baseline, the final exponentiation took 36% and the two Miller loops 20% each. A pairing precompile would bring it to about 0.3M–0.5M cycles, but only on the public path |
 | P.9 | An attestation reads one header or history record and the instance's `Freeze` account, both by derived address; every other step reads a fixed set of accounts |
